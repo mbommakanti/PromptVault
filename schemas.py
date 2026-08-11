@@ -1,0 +1,82 @@
+from pydantic import BaseModel, Field, EmailStr
+from datetime import datetime
+from typing import Optional
+import models
+
+class PromptCreate(BaseModel):
+
+    title:str = Field(min_length=5,max_length=100)
+    content:str=Field(min_length=5,max_length=1000)
+    description:Optional[str] = Field(min_length=5,max_length=1000,default=None)
+    tags:list[str] = Field(default_factory=list)
+    model_target : Optional[str] = Field(default=None)
+
+class PromptUpdate(BaseModel):
+
+    title:Optional[str] = Field(default=None,min_length=5,max_length=100)
+    content:Optional[str] = Field(default=None,min_length=5,max_length=1000)
+    description:Optional[str]=Field(default=None,min_length=5,max_length=1000,)
+    tags:Optional[list[str]]=Field(default=None)
+    model_target:Optional[str]=Field(default=None)
+
+class PromptOut(BaseModel):
+
+    id:int
+    owner_id:int
+    title:str 
+    description:Optional[str]
+    tags:Optional[list[str]]
+    model_target:Optional[str]
+    is_published:bool
+    current_version:int
+    created_at:datetime
+    updated_at:datetime
+
+    class Config:
+        from_attributes = True
+
+class PromptVersionOut(BaseModel):
+
+    id:int
+    prompt_id:int
+    version_number:int
+    content:str
+    created_at:datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserCreate(BaseModel):
+
+    username:str=Field(min_length=3)
+    email:EmailStr
+    password:str=Field(min_length=5)
+    first_name:str
+    last_name:str
+
+class UserOut(BaseModel):
+
+    id:int
+    username:str
+    email:EmailStr
+    first_name:str
+    last_name:str
+    is_active:bool
+    role:str
+
+    class Config:
+        from_attributes = True
+
+class UserLogin(BaseModel):
+
+    username:str
+    password:str
+
+class Token(BaseModel):
+
+    access_token:str
+    token_type:str
+    expires_in:int
+
+
