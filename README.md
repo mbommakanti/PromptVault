@@ -2,6 +2,8 @@
 
 A FastAPI backend for storing, versioning, and retrieving LLM prompts — with JWT authentication and ownership-based access control.
 
+**Live demo:** [promptvault-production-3160.up.railway.app/docs](https://promptvault-production-3160.up.railway.app/docs)
+
 ## Overview
 
 PromptVault solves a common problem for anyone working seriously with LLMs: prompts end up scattered across notes apps, Slack messages, and code comments, with no single place to store them, track how they've evolved, or control who can see what.
@@ -15,6 +17,8 @@ PromptVault provides a backend service where users can create, update, and organ
 - **Automatic prompt versioning** — every content update creates a new version rather than overwriting history
 - **Soft deletes** — deleted prompts are preserved (not destroyed) and excluded from normal queries
 - **Publish/unpublish toggle** — control whether a prompt is private or shared
+- **Structured error responses** — a global exception handler returns a consistent JSON error shape across the whole API
+- **Automated test suite** — 21 pytest tests covering auth, ownership, versioning, and soft-delete behavior, run against an isolated in-memory database
 
 ## Tech Stack
 
@@ -22,15 +26,18 @@ PromptVault provides a backend service where users can create, update, and organ
 - **SQLAlchemy** — ORM
 - **Alembic** — database migrations
 - **Pydantic** — request/response validation
-- **MySQL** — database
+- **PostgreSQL** — database (production, via Railway)
 - **python-jose** — JWT encoding/decoding
 - **passlib (bcrypt)** — password hashing
+- **pytest** — automated testing (21 tests, 96% coverage)
+- **Docker** — containerized deployment
+- **Railway** — hosting
 
 ## Project Structure
 
 ```
 PromptVault/
-├── main.py              # FastAPI app instance, router registration
+├── main.py              # FastAPI app instance, router registration, global exception handlers
 ├── database.py           # DB engine, session, and dependency
 ├── models.py              # SQLAlchemy ORM models (User, Prompt, PromptVersion)
 ├── schemas.py              # Pydantic request/response schemas
@@ -40,6 +47,11 @@ PromptVault/
 │   └── prompts.py              # Prompt CRUD and versioning endpoints
 ├── alembic/
 │   └── versions/                # Migration history
+├── conftest.py            # pytest fixtures, isolated in-memory test database
+├── test_users.py           # Auth test suite
+├── test_prompts.py          # Prompt CRUD, ownership, and versioning test suite
+├── Dockerfile
+├── .dockerignore
 └── requirements.txt
 ```
 
@@ -77,7 +89,7 @@ A `Prompt` holds metadata only; the actual prompt text lives in `PromptVersion`,
 
 ### Prerequisites
 - Python 3.10+
-- MySQL running locally (or update `DATABASE_URL` for your DB of choice)
+- PostgreSQL running locally (or update `DATABASE_URL` for your DB of choice)
 
 ### Installation
 
@@ -92,7 +104,7 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```
-DATABASE_URL=mysql+pymysql://<user>:<password>@localhost:3306/PromptVaultDB
+DATABASE_URL=postgresql://<user>:<password>@localhost:5432/PromptVaultDB
 SECRET_KEY=<your-secret-key>
 ALGORITHM=HS256
 ```
@@ -111,15 +123,36 @@ uvicorn main:app --reload
 
 Visit `http://localhost:8000/docs` for interactive API documentation.
 
+## Running Tests
+
+```bash
+pip install pytest httpx pytest-cov
+pytest --cov=. --cov-report=term-missing
+```
+
+Tests run against an isolated in-memory SQLite database, never touching real data. Current coverage: 96%.
+
+## Running with Docker
+
+```bash
+docker build -t promptvault .
+docker run -p 8000:8000 --env-file .env promptvault
+```
+
 ## Design Notes
 
 - **Prompt content is separated from prompt metadata** deliberately — this avoids duplicating "current content" in two places and keeping them in sync; the current version is always the version row matching `Prompt.current_version`.
 - **Ownership is always derived server-side** from the authenticated user's JWT, never from client-supplied fields — this is enforced consistently across every write endpoint.
 - **Deletes are soft** (`deleted_at` timestamp) rather than destructive, consistent with how production systems typically handle user data removal.
+- **Alembic's `sqlalchemy.url` is set dynamically at runtime** from the `DATABASE_URL` environment variable, rather than hardcoded in `alembic.ini` — necessary since the deployed database URL differs from the local one.
+
+## Deployment
+
+Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. PostgreSQL is provisioned as a separate Railway service and connected via a referenced environment variable. Live at [promptvault-production-3160.up.railway.app](https://promptvault-production-3160.up.railway.app/docs).
 
 ## Roadmap
 
-- Global exception handling with a structured JSON error contract
-- pytest coverage (auth failures, ownership violations, happy paths)
-- Docker + deployment (Railway)
+- ~~Global exception handling with a structured JSON error contract~~ ✅
+- ~~pytest coverage (auth failures, ownership violations, happy paths)~~ ✅
+- ~~Docker + deployment (Railway)~~ ✅
 - Prompt execution against LLM APIs (Month 3)
