@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
 
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 @router.post("/signup",response_model=UserOut,status_code=status.HTTP_201_CREATED)
 def create_user(db:db_dependency,user_request:UserCreate):

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 load_dotenv()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="users/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/users/token")
 db_dependency = Annotated[Session, Depends(get_db)]
 
 SECRET_KEY = os.getenv("SECRET_KEY")

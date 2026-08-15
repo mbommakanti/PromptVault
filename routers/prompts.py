@@ -6,7 +6,7 @@ from database import get_db
 from starlette import status
 from sqlalchemy import func
 
-router = APIRouter(prefix="/prompts", tags=["prompts"])
+router = APIRouter(prefix="/api/v1/prompts", tags=["prompts"])
 
 @router.post("",response_model=PromptOut,status_code=status.HTTP_201_CREATED)
 def create_prompt(db:db_dependency,prompt_request:PromptCreate,current_user:User=Depends(get_current_user)):
