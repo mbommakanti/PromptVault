@@ -1,32 +1,32 @@
-from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime
-from typing import Optional
-import models
+
+from pydantic import BaseModel, EmailStr, Field
+
 
 class PromptCreate(BaseModel):
 
     title:str = Field(min_length=5,max_length=100)
     content:str=Field(min_length=5,max_length=1000)
-    description:Optional[str] = Field(min_length=5,max_length=1000,default=None)
+    description:str | None = Field(min_length=5,max_length=1000,default=None)
     tags:list[str] = Field(default_factory=list)
-    model_target : Optional[str] = Field(default=None)
+    model_target : str | None = Field(default=None)
 
 class PromptUpdate(BaseModel):
 
-    title:Optional[str] = Field(default=None,min_length=5,max_length=100)
-    content:Optional[str] = Field(default=None,min_length=5,max_length=1000)
-    description:Optional[str]=Field(default=None,min_length=5,max_length=1000,)
-    tags:Optional[list[str]]=Field(default=None)
-    model_target:Optional[str]=Field(default=None)
+    title:str | None = Field(default=None,min_length=5,max_length=100)
+    content:str | None = Field(default=None,min_length=5,max_length=1000)
+    description:str | None=Field(default=None,min_length=5,max_length=1000,)
+    tags:list[str] | None=Field(default=None)
+    model_target:str | None=Field(default=None)
 
 class PromptOut(BaseModel):
 
     id:int
     owner_id:int
     title:str 
-    description:Optional[str]
-    tags:Optional[list[str]]
-    model_target:Optional[str]
+    description:str | None
+    tags:list[str] | None
+    model_target:str | None
     is_published:bool
     current_version:int
     created_at:datetime

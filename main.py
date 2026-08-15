@@ -1,8 +1,9 @@
-from fastapi import FastAPI,Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from routers import users, prompts
-from rate_limit import limiter
 from slowapi.errors import RateLimitExceeded
+
+from rate_limit import limiter
+from routers import prompts, users
 
 app = FastAPI()
 

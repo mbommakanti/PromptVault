@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Path
-from schemas import PromptCreate, PromptUpdate, PromptOut, PromptVersionOut
-from models import Prompt, PromptVersion, User
-from auth import  db_dependency, get_current_user
-from starlette import status
 from sqlalchemy import func
+from starlette import status
+
+from auth import db_dependency, get_current_user
+from models import Prompt, PromptVersion, User
+from schemas import PromptCreate, PromptOut, PromptUpdate, PromptVersionOut
 
 router = APIRouter(prefix="/api/v1/prompts", tags=["prompts"])
 
@@ -134,7 +135,6 @@ def delete_prompt_by_id(db:db_dependency,prompt_id:int=Path(gt=0),current_user:U
 
     db.commit()
     db.refresh(prompt)
-    return None
 
 @router.patch("/{prompt_id}/publish",response_model=PromptOut,status_code=status.HTTP_200_OK)
 def toggle_publish_status(db:db_dependency,prompt_id:int=Path(gt=0),current_user:User=Depends(get_current_user)):
@@ -184,7 +184,7 @@ def get_prompt_versions_by_prompt_id(db:db_dependency,prompt_id:int=Path(gt=0),c
         raise owner_exception
 
     prompt_versions = db.query(PromptVersion).filter(
-        (PromptVersion.prompt_id == prompt_id)
+        PromptVersion.prompt_id == prompt_id
     ).order_by(PromptVersion.version_number).all()
 
     return prompt_versions

@@ -5,8 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import models  # noqa: F401 - ensures models are registered on Base.metadata
-from main import app
 from database import Base, get_db
+from main import app
 from rate_limit import limiter
 
 limiter.enabled = False

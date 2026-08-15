@@ -1,5 +1,6 @@
 from conftest import API_PREFIX
 
+
 def test_signup_success(client, test_user_data):
     response = client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     assert response.status_code == 201

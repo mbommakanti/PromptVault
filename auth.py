@@ -1,16 +1,17 @@
 import os
-from dotenv import load_dotenv
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from datetime import timedelta, datetime, timezone
-from fastapi.security import OAuth2PasswordBearer
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
-from fastapi import  Depends, HTTPException
+
+from dotenv import load_dotenv
+from fastapi import Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+from starlette import status
+
 from database import get_db
 from models import User
-from starlette import status
-from sqlalchemy.orm import Session
-
 
 load_dotenv()
 

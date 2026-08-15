@@ -1,4 +1,4 @@
-from conftest import create_and_login, API_PREFIX
+from conftest import API_PREFIX, create_and_login
 
 
 def test_create_prompt_success(client, auth_headers):

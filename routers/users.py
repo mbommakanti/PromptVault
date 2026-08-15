@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from schemas import UserCreate, UserOut, UserLogin, Token
-from models import User
-from auth import hash_password, verify_password, create_access_token, db_dependency
-from starlette import status
-from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordRequestForm
+from starlette import status
+
+from auth import create_access_token, db_dependency, hash_password, verify_password
+from models import User
 from rate_limit import limiter
+from schemas import Token, UserCreate, UserOut
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -41,7 +43,7 @@ def user_login(request:Request,db:db_dependency,form_data:OAuth2PasswordRequestF
             detail="Incorrect Username or Password"
     )
     user = db.query(User).filter(
-        (User.username==form_data.username)
+        User.username==form_data.username
     ).first()
     if not user:
         raise user_exception   

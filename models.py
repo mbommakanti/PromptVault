@@ -1,7 +1,20 @@
-from database import Base, engine, SessionLocal
-from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, DateTime, Text, JSON, func, UniqueConstraint
-from sqlalchemy.orm import relationship
 import sqlalchemy as sa
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import relationship
+
+from database import Base
+
 
 class User(Base):
     __tablename__ = "users"
