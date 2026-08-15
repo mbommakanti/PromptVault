@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from schemas import UserCreate, UserOut, UserLogin, Token
 from models import User
 from auth import hash_password, verify_password, create_access_token, db_dependency
@@ -6,12 +6,13 @@ from database import get_db
 from starlette import status
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
-
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 @router.post("/signup",response_model=UserOut,status_code=status.HTTP_201_CREATED)
-def create_user(db:db_dependency,user_request:UserCreate):
+@limiter.limit("5/minute")
+def create_user(request:Request,db:db_dependency,user_request:UserCreate):
     user_exception = HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="User already exists"
@@ -34,7 +35,8 @@ def create_user(db:db_dependency,user_request:UserCreate):
     return new_user
 
 @router.post("/token",response_model=Token,status_code=status.HTTP_200_OK)
-def user_login(db:db_dependency,form_data:OAuth2PasswordRequestForm=Depends()):
+@limiter.limit("5/minute")
+def user_login(request:Request,db:db_dependency,form_data:OAuth2PasswordRequestForm=Depends()):
     user_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect Username or Password"
