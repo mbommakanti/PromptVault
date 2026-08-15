@@ -1,5 +1,7 @@
+from conftest import API_PREFIX
+
 def test_signup_success(client, test_user_data):
-    response = client.post("/users/signup", json=test_user_data)
+    response = client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     assert response.status_code == 201
     data = response.json()
     assert data["username"] == test_user_data["username"]
@@ -8,15 +10,15 @@ def test_signup_success(client, test_user_data):
 
 
 def test_signup_duplicate_username_or_email_fails(client, test_user_data):
-    client.post("/users/signup", json=test_user_data)
-    response = client.post("/users/signup", json=test_user_data)
+    client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
+    response = client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     assert response.status_code == 400
 
 
 def test_login_success_returns_token(client, test_user_data):
-    client.post("/users/signup", json=test_user_data)
+    client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     response = client.post(
-        "/users/token",
+        f"{API_PREFIX}/users/token",
         data={
             "username": test_user_data["username"],
             "password": test_user_data["password"],
@@ -29,9 +31,9 @@ def test_login_success_returns_token(client, test_user_data):
 
 
 def test_login_wrong_password_fails(client, test_user_data):
-    client.post("/users/signup", json=test_user_data)
+    client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     response = client.post(
-        "/users/token",
+        f"{API_PREFIX}/users/token",
         data={"username": test_user_data["username"], "password": "wrongpassword"},
     )
     assert response.status_code == 401
@@ -39,7 +41,7 @@ def test_login_wrong_password_fails(client, test_user_data):
 
 def test_login_nonexistent_user_fails(client):
     response = client.post(
-        "/users/token",
+        f"{API_PREFIX}/users/token",
         data={"username": "nosuchuser", "password": "whatever123"},
     )
     assert response.status_code == 401

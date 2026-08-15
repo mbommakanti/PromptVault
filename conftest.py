@@ -7,6 +7,10 @@ from sqlalchemy.pool import StaticPool
 import models  # noqa: F401 - ensures models are registered on Base.metadata
 from main import app
 from database import Base, get_db
+from rate_limit import limiter
+
+limiter.enabled = False
+API_PREFIX = "/api/v1"
 
 # --- Isolated, in-memory SQLite database used only for tests ---
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -55,9 +59,9 @@ def test_user_data():
 @pytest.fixture()
 def auth_headers(client, test_user_data):
     """Signs up and logs in a user, returns ready-to-use auth headers."""
-    client.post("/users/signup", json=test_user_data)
+    client.post(f"{API_PREFIX}/users/signup", json=test_user_data)
     response = client.post(
-        "/users/token",
+        f"{API_PREFIX}/users/token",
         data={
             "username": test_user_data["username"],
             "password": test_user_data["password"],
@@ -76,9 +80,9 @@ def create_and_login(client, username):
         "first_name": "Other",
         "last_name": "User",
     }
-    client.post("/users/signup", json=user_data)
+    client.post(f"{API_PREFIX}/users/signup", json=user_data)
     response = client.post(
-        "/users/token",
+        f"{API_PREFIX}/users/token",
         data={"username": username, "password": "password123"},
     )
     token = response.json()["access_token"]
