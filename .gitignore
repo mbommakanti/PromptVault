@@ -12,3 +12,4 @@ env/
 # IDE
 .vscode/
 .idea/
+.coverage
