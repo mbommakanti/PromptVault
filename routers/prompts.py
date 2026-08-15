@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from schemas import PromptCreate, PromptUpdate, PromptOut, PromptVersionOut
 from models import Prompt, PromptVersion, User
 from auth import  db_dependency, get_current_user
-from database import get_db
 from starlette import status
 from sqlalchemy import func
 

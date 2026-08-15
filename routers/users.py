@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from schemas import UserCreate, UserOut, UserLogin, Token
 from models import User
 from auth import hash_password, verify_password, create_access_token, db_dependency
-from database import get_db
 from starlette import status
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
