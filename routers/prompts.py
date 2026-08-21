@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Path
-from sqlalchemy import func
+from sqlalchemy import func, text
 from starlette import status
 
 from auth import db_dependency, get_current_user
@@ -20,7 +20,7 @@ def create_prompt(db:db_dependency,prompt_request:PromptCreate,current_user:User
     )
 
     db.add(prompt_to_create)
-    db.commit()
+    db.flush()
     db.refresh(prompt_to_create)
 
     prompt_version_to_create = PromptVersion(
@@ -94,12 +94,16 @@ def update_prompt(prompt_update:PromptUpdate,db:db_dependency,current_user:User=
         prompt.model_target = prompt_update.model_target
 
     if prompt_update.content is not None:
+        new_version_number = db.execute(
+            text("UPDATE prompts SET current_version = current_version + 1 WHERE id = :prompt_id RETURNING current_version"),
+            {"prompt_id": prompt.id},
+        ).scalar_one()
+
         prompt_version_to_create = PromptVersion(
             prompt_id = prompt.id,
-            version_number = prompt.current_version + 1,
+            version_number = new_version_number,
             content = prompt_update.content
         )
-        prompt.current_version = prompt.current_version + 1
         prompt.updated_at = func.now()
 
         db.add(prompt_version_to_create)

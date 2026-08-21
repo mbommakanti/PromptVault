@@ -6,7 +6,7 @@ from pydantic import BaseModel, EmailStr, Field
 class PromptCreate(BaseModel):
 
     title:str = Field(min_length=5,max_length=100)
-    content:str=Field(min_length=5,max_length=1000)
+    content:str=Field(min_length=5,max_length=20000)
     description:str | None = Field(min_length=5,max_length=1000,default=None)
     tags:list[str] = Field(default_factory=list)
     model_target : str | None = Field(default=None)
@@ -14,7 +14,7 @@ class PromptCreate(BaseModel):
 class PromptUpdate(BaseModel):
 
     title:str | None = Field(default=None,min_length=5,max_length=100)
-    content:str | None = Field(default=None,min_length=5,max_length=1000)
+    content:str | None = Field(default=None,min_length=5,max_length=20000)
     description:str | None=Field(default=None,min_length=5,max_length=1000,)
     tags:list[str] | None=Field(default=None)
     model_target:str | None=Field(default=None)
