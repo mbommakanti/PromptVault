@@ -15,10 +15,14 @@ jobs:
     # read these from the environment at import time — none of them need to
     # point at a real service, since tests run against an in-memory SQLite DB
     # (see conftest.py). Just need to exist so the app doesn't crash on boot.
+    # OPENAI_API_KEY is required by config.ProviderSettings for the same
+    # reason -- tests mock the OpenAI client itself (see test_llm_provider.py
+    # and test_executions.py), so this never needs to be a real key.
     env:
       DATABASE_URL: postgresql://ci_user:ci_pass@localhost:5432/ci_placeholder_db
       SECRET_KEY: ci-only-placeholder-secret-not-used-in-production
       ALGORITHM: HS256
+      OPENAI_API_KEY: ci-only-placeholder-not-a-real-key
 
     steps:
       - name: Check out code

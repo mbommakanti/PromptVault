@@ -79,4 +79,20 @@ class Token(BaseModel):
     token_type:str
     expires_in:int
 
+class AdapterResponse(BaseModel):
 
+    model_response:str
+    model_name:str
+    response_status:str
+    input_tokens:int
+    output_tokens:int
+    total_tokens:int
+    incomplete_reason:str | None = None
+    response_id:str
+
+class ExecutionRequest(BaseModel):
+
+    input:str=Field(min_length=5, max_length=2000)
+    model:str | None = None
+    temperature:float | None = Field(ge=0, le=2, default=None)
+    max_tokens:int|None = Field(ge=16, le=1000,default=None)

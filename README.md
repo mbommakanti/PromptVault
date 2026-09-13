@@ -20,7 +20,8 @@ PromptVault provides a backend service where users can create, update, and organ
 - **API versioning** — all routes live under `/api/v1`, so future breaking changes can ship under `/api/v2` without disrupting existing clients
 - **Rate limiting** — login and signup are limited to 5 requests/minute per IP to reduce brute-force and spam risk
 - **Structured error responses** — a global exception handler returns a consistent JSON error shape across the whole API, including rate-limit (429) responses
-- **Automated test suite** — 21 pytest tests covering auth, ownership, versioning, and soft-delete behavior, run against an isolated in-memory database
+- **LLM execution** — run a saved, immutable prompt version against OpenAI through a normalized provider adapter; returns generated text, completion status, token usage, and the provider's response ID
+- **Automated test suite** — 35 pytest tests covering auth, ownership, versioning, soft-delete, and LLM execution (provider calls mocked), run against an isolated in-memory database
 
 ## Tech Stack
 
@@ -32,7 +33,9 @@ PromptVault provides a backend service where users can create, update, and organ
 - **python-jose** — JWT encoding/decoding
 - **passlib (bcrypt)** — password hashing
 - **slowapi** — rate limiting
-- **pytest** — automated testing (21 tests, 96% coverage)
+- **openai** — LLM provider SDK (Responses API)
+- **pydantic-settings** — typed, validated provider configuration from environment variables
+- **pytest** — automated testing (35 tests, 97% coverage)
 - **Docker** — containerized deployment
 - **Railway** — hosting
 
@@ -46,14 +49,19 @@ PromptVault/
 ├── schemas.py              # Pydantic request/response schemas
 ├── auth.py                  # Password hashing, JWT creation/verification, get_current_user
 ├── rate_limit.py             # Shared slowapi Limiter instance
+├── config.py                  # Typed provider settings (ProviderSettings, get_settings)
+├── llm_provider.py             # OpenAI provider adapter (open_ai_adapter, get_openai_client)
 ├── routers/
 │   ├── users.py               # Signup, login endpoints
-│   └── prompts.py              # Prompt CRUD and versioning endpoints
+│   ├── prompts.py              # Prompt CRUD and versioning endpoints
+│   └── executions.py            # LLM execution endpoint
 ├── alembic/
 │   └── versions/                # Migration history
 ├── conftest.py            # pytest fixtures, isolated in-memory test database
 ├── test_users.py           # Auth test suite
 ├── test_prompts.py          # Prompt CRUD, ownership, and versioning test suite
+├── test_llm_provider.py      # Provider adapter test suite (OpenAI client mocked)
+├── test_executions.py         # LLM execution endpoint test suite (adapter mocked)
 ├── Dockerfile
 ├── .dockerignore
 └── requirements.txt
@@ -91,6 +99,11 @@ All endpoints are versioned under `/api/v1`.
 | GET | `/api/v1/prompts/{id}/versions` | owner or published | List version history |
 | GET | `/api/v1/prompts/{id}/versions/{version_number}` | owner or published | Retrieve one specific version |
 
+### Execution (requires authentication)
+| Method | Path | Access | Description |
+|---|---|---|---|
+| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; returns generated text, completion status, token usage, and provider response ID. Not yet persisted (see Roadmap). |
+
 ## Setup
 
 ### Prerequisites
@@ -113,7 +126,10 @@ Create a `.env` file in the project root:
 DATABASE_URL=postgresql://<user>:<password>@localhost:5432/PromptVaultDB
 SECRET_KEY=<your-secret-key>
 ALGORITHM=HS256
+OPENAI_API_KEY=<your-openai-api-key>
 ```
+
+`OPENAI_API_KEY` is required (the app fails fast at startup if it's missing). Default model/temperature/max-token/timeout values live in `config.py` and can be overridden with `OPENAI_DEFAULT_MODEL`, `OPENAI_DEFAULT_TEMPERATURE`, `OPENAI_DEFAULT_MAX_TOKENS`, and `OPENAI_TIMEOUT_SECONDS` if needed.
 
 ### Run migrations
 
@@ -136,7 +152,7 @@ pip install pytest httpx pytest-cov
 pytest --cov=. --cov-report=term-missing
 ```
 
-Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. Current coverage: 96%.
+Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 97%.
 
 ## Running with Docker
 
@@ -153,6 +169,8 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **Alembic's `sqlalchemy.url` is set dynamically at runtime** from the `DATABASE_URL` environment variable, rather than hardcoded in `alembic.ini` — necessary since the deployed database URL differs from the local one.
 - **API versioning uses URL path prefixing** (`/api/v1`) rather than headers or query params — simplest to test, document, and reason about; a future `/api/v2` can be added as a parallel set of routes without breaking existing clients.
 - **Rate limiting is keyed by IP address**, applied to signup and login specifically since those are the highest-risk endpoints for brute-force and spam abuse.
+- **The OpenAI SDK never leaks past `llm_provider.py`** — the execution route only ever sees a normalized `AdapterResponse`, never a raw provider object. See [ADR-002](docs/decisions/ADR-002-llm-provider-integration.md) for why the Responses API was chosen over Chat Completions, and how stored prompt content vs. per-call input is split.
+- **Execution is not yet persisted** — `POST .../execute` calls OpenAI and returns the result directly; no database row is written. This is a deliberate scope boundary, not an oversight (see Roadmap).
 
 ## Deployment
 
@@ -165,4 +183,5 @@ Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. 
 - ~~Docker + deployment (Railway)~~ ✅
 - ~~API versioning (`/api/v1`)~~ ✅
 - ~~Rate limiting on auth endpoints~~ ✅
-- Prompt execution against LLM APIs (Month 3)
+- ~~Prompt execution against LLM APIs~~ ✅
+- Execution persistence and history (in progress)
