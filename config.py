@@ -10,7 +10,7 @@ class ProviderSettings(BaseSettings):
     openai_timeout_seconds:float = 30.0
     openai_default_model:str="gpt-4o-mini"
     openai_default_temperature:float=0.0
-    openai_default_max_tokens:int=300
+    openai_default_max_tokens:int=10000
 
 @lru_cache
 def get_settings():

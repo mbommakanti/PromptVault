@@ -397,6 +397,25 @@ These incidents are useful interview material.
 
 ---
 
+# Learnings Documentation
+
+`docs/LEARNINGS.md` is a running, developer-facing glossary of concepts the developer has learned while building PromptOps — a reference to look things up by topic later, not a session diary.
+
+At the end of a work session, if the developer learned a new technical concept (a language/framework mechanism, a design pattern, a debugging technique):
+
+- Read the current file first. If the concept is already documented, extend that entry instead of duplicating it.
+- Add it under the relevant category heading (create a new category if none fits).
+- Explain it in simple, plain language, as if to someone who has never seen it before — no unexplained jargon.
+- Keep each entry short: a few sentences, not a tutorial.
+- Note where it actually showed up in this project (file/feature) so the entry stays concrete, not abstract.
+- Note the date learned.
+
+Do not log concepts the developer clearly already understood before the session, or routine syntax with nothing to explain.
+
+Write it in second person, addressed to the developer.
+
+---
+
 # Primary Build Target
 
 The main target is a version of PromptOps capable of:

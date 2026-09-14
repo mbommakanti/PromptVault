@@ -4,6 +4,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -54,4 +55,31 @@ class PromptVersion(Base):
     version_number = Column(Integer)
     content = Column(Text,nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+class Execution(Base):
+    user = relationship("User")
+    prompt = relationship("Prompt")
+    prompt_version = relationship("PromptVersion")
+    __tablename__="executions"
+
+    id = Column(Integer,primary_key=True)
+    user_id = Column(Integer,ForeignKey("users.id"),index=True,nullable=False)
+    prompt_id = Column(Integer,ForeignKey("prompts.id"),index=True,nullable=False)
+    prompt_version_id = Column(Integer,ForeignKey("prompt_versions.id"),nullable=False)
+    model_name = Column(Text, nullable=False)
+    temperature = Column(Float,nullable=False)
+    max_tokens = Column(Integer,nullable=False)
+    input = Column(Text,nullable=False)
+    output = Column(Text, nullable=False)
+    status = Column(String, nullable=False)
+    incomplete_reason = Column(String,nullable=True)
+    input_tokens = Column(Integer,nullable=False)
+    output_tokens = Column(Integer,nullable=False)
+    total_tokens = Column(Integer,nullable=False)
+    provider_response_id = Column(String,nullable=False)
+    latency_ms = Column(Integer,nullable=False)
+    created_at = Column(DateTime, nullable=False,server_default=func.now())
+
+
+
 

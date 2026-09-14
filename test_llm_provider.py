@@ -16,6 +16,8 @@ def _fake_openai_response(
     incomplete_details=None,
     model="gpt-4o-mini-2024-07-18",
     response_id="resp_fake123",
+    temperature=0.7,
+    max_output_tokens=200,
 ):
     """A plain object shaped like the OpenAI Responses API's return value,
     exposing only the attributes open_ai_adapter actually reads. Keeps these
@@ -32,6 +34,8 @@ def _fake_openai_response(
         ),
         incomplete_details=incomplete_details,
         id=response_id,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -51,6 +55,8 @@ def test_open_ai_adapter_maps_completed_response_correctly():
     assert result.output_tokens == 10
     assert result.total_tokens == 15
     assert result.response_id == "resp_fake123"
+    assert result.temperature == 0.7
+    assert result.max_tokens == 200
 
 
 def test_open_ai_adapter_maps_truncated_response_correctly():

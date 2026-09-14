@@ -29,11 +29,12 @@ def open_ai_adapter(*,input:str,instructions:str,model:str |None = None,
     store=False
     )
 
-
     openai_adapter_output = AdapterResponse (
         model_response = response.output_text,
         model_name=response.model,
         response_status=response.status,
+        max_tokens=response.max_output_tokens,
+        temperature=response.temperature,
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
         total_tokens=response.usage.total_tokens,

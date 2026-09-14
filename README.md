@@ -21,7 +21,8 @@ PromptVault provides a backend service where users can create, update, and organ
 - **Rate limiting** — login and signup are limited to 5 requests/minute per IP to reduce brute-force and spam risk
 - **Structured error responses** — a global exception handler returns a consistent JSON error shape across the whole API, including rate-limit (429) responses
 - **LLM execution** — run a saved, immutable prompt version against OpenAI through a normalized provider adapter; returns generated text, completion status, token usage, and the provider's response ID
-- **Automated test suite** — 35 pytest tests covering auth, ownership, versioning, soft-delete, and LLM execution (provider calls mocked), run against an isolated in-memory database
+- **Execution history** — every execution is persisted as an inspectable, immutable record (resolved model config, input, output, token usage, latency, provider response ID) and retrievable by id, scoped to whoever ran it
+- **Automated test suite** — 40 pytest tests covering auth, ownership, versioning, soft-delete, and LLM execution/persistence (provider calls mocked), run against an isolated in-memory database
 
 ## Tech Stack
 
@@ -35,7 +36,7 @@ PromptVault provides a backend service where users can create, update, and organ
 - **slowapi** — rate limiting
 - **openai** — LLM provider SDK (Responses API)
 - **pydantic-settings** — typed, validated provider configuration from environment variables
-- **pytest** — automated testing (35 tests, 97% coverage)
+- **pytest** — automated testing (40 tests, 97% coverage)
 - **Docker** — containerized deployment
 - **Railway** — hosting
 
@@ -45,7 +46,7 @@ PromptVault provides a backend service where users can create, update, and organ
 PromptVault/
 ├── main.py              # FastAPI app instance, router registration, global exception handlers
 ├── database.py           # DB engine, session, and dependency
-├── models.py              # SQLAlchemy ORM models (User, Prompt, PromptVersion)
+├── models.py              # SQLAlchemy ORM models (User, Prompt, PromptVersion, Execution)
 ├── schemas.py              # Pydantic request/response schemas
 ├── auth.py                  # Password hashing, JWT creation/verification, get_current_user
 ├── rate_limit.py             # Shared slowapi Limiter instance
@@ -54,7 +55,7 @@ PromptVault/
 ├── routers/
 │   ├── users.py               # Signup, login endpoints
 │   ├── prompts.py              # Prompt CRUD and versioning endpoints
-│   └── executions.py            # LLM execution endpoint
+│   └── executions.py            # LLM execution + execution history endpoints
 ├── alembic/
 │   └── versions/                # Migration history
 ├── conftest.py            # pytest fixtures, isolated in-memory test database
@@ -75,7 +76,11 @@ PromptVault/
 
 **PromptVersion** — id, prompt_id, version_number, content, created_at
 
+**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, created_at
+
 A `Prompt` holds metadata only; the actual prompt text lives in `PromptVersion`, with one-to-many versions per prompt. This keeps content history append-only and avoids any single "current content" field that could fall out of sync with version history.
+
+`Execution` is an append-only fact record, not an editable entity like `Prompt` — it captures what a specific call actually did (resolved model config, not the caller's raw optional request; see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) and is never updated after creation.
 
 ## API Endpoints
 
@@ -102,7 +107,8 @@ All endpoints are versioned under `/api/v1`.
 ### Execution (requires authentication)
 | Method | Path | Access | Description |
 |---|---|---|---|
-| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; returns generated text, completion status, token usage, and provider response ID. Not yet persisted (see Roadmap). |
+| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, latency, provider response ID) |
+| GET | `/api/v1/executions/{execution_id}` | executor only | Retrieve one past execution by id. Deliberately **not** the prompt's "owner or published" rule — scoped to whoever ran it, regardless of the prompt's publish state (see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) |
 
 ## Setup
 
@@ -152,7 +158,7 @@ pip install pytest httpx pytest-cov
 pytest --cov=. --cov-report=term-missing
 ```
 
-Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 97%.
+Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 97% (40 tests).
 
 ## Running with Docker
 
@@ -170,7 +176,9 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **API versioning uses URL path prefixing** (`/api/v1`) rather than headers or query params — simplest to test, document, and reason about; a future `/api/v2` can be added as a parallel set of routes without breaking existing clients.
 - **Rate limiting is keyed by IP address**, applied to signup and login specifically since those are the highest-risk endpoints for brute-force and spam abuse.
 - **The OpenAI SDK never leaks past `llm_provider.py`** — the execution route only ever sees a normalized `AdapterResponse`, never a raw provider object. See [ADR-002](docs/decisions/ADR-002-llm-provider-integration.md) for why the Responses API was chosen over Chat Completions, and how stored prompt content vs. per-call input is split.
-- **Execution is not yet persisted** — `POST .../execute` calls OpenAI and returns the result directly; no database row is written. This is a deliberate scope boundary, not an oversight (see Roadmap).
+- **Executions persist resolved config, not the raw request** — `temperature`/`max_tokens` on a persisted `Execution` reflect what the provider actually used (read back from its response), not the caller's optional request field, which may have been left unset. See [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md).
+- **Execution read access is scoped to the executor, not the prompt owner** — a published prompt makes its *content* readable to anyone, not the private input/output of everyone who's executed it. See ADR-003 for the specific leak this prevents.
+- **Only successful executions are persisted (for now)** — a failed provider call still propagates to the generic 500 handler and writes no row. Deliberately deferred to a dedicated failure-taxonomy step rather than solved ad hoc (see Roadmap).
 
 ## Deployment
 
@@ -184,4 +192,5 @@ Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. 
 - ~~API versioning (`/api/v1`)~~ ✅
 - ~~Rate limiting on auth endpoints~~ ✅
 - ~~Prompt execution against LLM APIs~~ ✅
-- Execution persistence and history (in progress)
+- ~~Execution persistence and history~~ ✅
+- Failure handling and bounded retries for LLM execution

@@ -84,6 +84,8 @@ class AdapterResponse(BaseModel):
     model_response:str
     model_name:str
     response_status:str
+    max_tokens:int
+    temperature:float
     input_tokens:int
     output_tokens:int
     total_tokens:int
@@ -95,4 +97,30 @@ class ExecutionRequest(BaseModel):
     input:str=Field(min_length=5, max_length=2000)
     model:str | None = None
     temperature:float | None = Field(ge=0, le=2, default=None)
-    max_tokens:int|None = Field(ge=16, le=1000,default=None)
+    max_tokens:int|None = Field(ge=16, le=10000,default=None)
+
+class ExecutionOut(BaseModel):
+
+    id:int
+    user_id:int
+    prompt_id:int
+    prompt_version_id:int
+    model_name:str 
+    temperature:float
+    max_tokens:int
+    input:str
+    output:str
+    status:str
+    incomplete_reason:str|None=None
+    input_tokens:int
+    output_tokens:int
+    total_tokens:int
+    provider_response_id:str
+    latency_ms:int
+    created_at:datetime
+
+    class Config:
+        from_attributes = True
+
+
+

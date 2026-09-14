@@ -2,7 +2,7 @@
 
 Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_Engineer_Build_Guide.docx`). One entry per completed step: what was done, how it was verified, and the stop condition that justified moving on.
 
-**Current status: Step 1 complete. Not yet started: Step 2.**
+**Current status: Step 2 complete. Not yet started: Step 3.**
 
 ---
 
@@ -47,8 +47,30 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 
 ---
 
-## Step 2 — Execution persistence (not started)
+## Step 2 — Execution persistence ✅ (2026-09-13)
 
 **Goal:** Turn every model call into an inspectable historical execution.
+
+**Done:**
+- Added the `Execution` model (`models.py`): FK columns to `User`/`Prompt`/`PromptVersion` (all `nullable=False`, indexed on `user_id`/`prompt_id`), resolved `model_name`/`temperature`/`max_tokens`, `input`/`output`, `status`/`incomplete_reason`, token counts, `provider_response_id`, `latency_ms`, and a `server_default=func.now()` `created_at` — matching the immutability/append-only-fact-record convention, not the editable-entity convention `Prompt` uses. Plain (non-`back_populates`) `relationship()`s to `User`/`Prompt`/`PromptVersion` for read convenience.
+- Migration `ac5e642162ec_create_executions_table.py`, applied to the local dev DB and verified against the actual Postgres schema.
+- Added `ExecutionOut` (`schemas.py`), matching the model's nullability exactly (only `incomplete_reason` is optional).
+- Extended `AdapterResponse` (`schemas.py`) with required `temperature`/`max_tokens`, and `open_ai_adapter` (`llm_provider.py`) to populate them by reading `response.temperature`/`response.max_output_tokens` back from the real OpenAI response object — confirmed against a real response that these fields exist and reflect the actually-used values, not by trusting the assumption blind. See [ADR-003](decisions/ADR-003-execution-persistence-and-access.md) for why this was chosen over locally recomputing the same defaulting logic a second time.
+- `execute_llm_provider` (`routers/executions.py`) now times only the `open_ai_adapter(...)` call (`time.perf_counter()`), builds an `Execution` row from the *resolved* adapter-response values (not the raw, possibly-`None` request values), persists it (`add`/`commit`/`refresh`), and returns `ExecutionOut` with `201 Created`. Only the success path persists — a raised provider error still propagates to the generic 500 handler and writes no row (Step 3's job to change).
+- Added `GET /api/v1/executions/{execution_id}` on a new `execution_router` (`/api/v1/executions` prefix, registered separately in `main.py`). Access is **owner-of-the-execution only** (`execution.user_id == current_user.id`), deliberately stricter than the prompts' "owner or published" rule — see ADR-003 for the privacy reasoning (a published prompt's other executors' input/output must not become readable to the prompt owner).
+- Raised `config.py`'s `openai_default_max_tokens` from 300 to 10000, matching `ExecutionRequest.max_tokens`'s existing `le=10000` request-time ceiling (previously the default was well under what a client could explicitly request).
+- Tests: 6 new cases in `test_executions.py` (owner GET round-trip, 401, 404, 403-for-prompt-owner-who-isn't-the-executor, and a regression lock on "failure does not persist a row"); updated stale mocks in `test_llm_provider.py`/`test_executions.py` to include the two new `AdapterResponse` fields; updated two tests whose expectations were still `200`/old field names after the endpoint's response shape and status code changed.
+- Full suite green: 40/40 passing, 97% coverage.
+- Verified manually end-to-end with a real billed call (a code-review-style prompt): persisted row's resolved `temperature`/`max_tokens`, token usage, `latency_ms`, and real `provider_response_id` all correct; retrieved the same execution back via `GET /api/v1/executions/{id}` and reconstructed exactly what ran from the row alone.
+
+**Shipped as:** not yet committed/pushed — working tree has these changes.
+
+**Stop condition:** Able to explain, without assistance: why resolved (not raw-request) config is persisted and where those resolved values come from; why execution read access is scoped to the executor rather than the prompt owner, including the specific leak scenario that rule prevents; and why failure persistence was deliberately deferred to Step 3 rather than solved ad hoc here.
+
+---
+
+## Step 3 — Failure taxonomy and retries (not started)
+
+**Goal:** Handle LLM-provider failures intentionally instead of treating everything as "500."
 
 Not yet started.

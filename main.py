@@ -12,6 +12,7 @@ app.state.limiter = limiter
 app.include_router(users.router)
 app.include_router(prompts.router)
 app.include_router(executions.router)
+app.include_router(executions.execution_router)
 
 @app.exception_handler(HTTPException)
 def http_exception_handler(request:Request,exc:HTTPException):
