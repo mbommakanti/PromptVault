@@ -265,6 +265,28 @@ If these questions cannot be answered, do not add the technology.
 
 ---
 
+# AI/LLM Skills Checklist
+
+A reference list of core LLM-engineering skills the developer wants explicit visibility into as the project progresses. Not every step touches every item — most steps touch none or one or two.
+
+- LLM API integration — sync vs. async calls
+- Reading LLM API responses
+- Streaming responses
+- API key management (env vars, never hardcoded)
+- Token counting & cost estimation
+- Rate limit handling / error handling for API timeouts
+- Prompt engineering fundamentals — system prompts, few-shot examples
+- Zero-shot / single-shot / multi-shot prompting
+- Chain-of-thought prompting
+- Prompt templates with variable injection
+- Tool calls / function calling protocol
+- Structured output (JSON mode / function calling for reliable parsing)
+- Context window limits & conversation-length handling
+
+Some of these are only partially covered by the current 25-step build guide, or not covered at all (e.g. multi-turn conversation handling was explicitly scoped out in [ADR-002](docs/decisions/ADR-002-llm-provider-integration.md)). Say so plainly rather than stretching a step to claim coverage it doesn't have.
+
+---
+
 # Implementation Workflow
 
 Work through `docs/PROMPTOPS_BUILD_GUIDE.md` sequentially.
@@ -284,6 +306,8 @@ Why does this matter in an AI production system?
 ## Concepts to Understand
 
 Explain the concepts the developer should know before coding.
+
+Explicitly call out which item(s) from the AI/LLM Skills Checklist (above) this step addresses, if any — so the developer can track real coverage of that list as the project progresses, not just build-guide step numbers.
 
 ## Current Code Impact
 
