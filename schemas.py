@@ -109,14 +109,15 @@ class ExecutionOut(BaseModel):
     temperature:float
     max_tokens:int
     input:str
-    output:str
+    output:str|None
     status:str
     incomplete_reason:str|None=None
-    input_tokens:int
-    output_tokens:int
-    total_tokens:int
-    provider_response_id:str
+    input_tokens:int|None
+    output_tokens:int|None
+    total_tokens:int|None
+    provider_response_id:str|None
     latency_ms:int
+    retry_attempts:int
     created_at:datetime
 
     class Config:
