@@ -12,6 +12,24 @@ A decorator that makes a function remember its own past results. The first time 
 
 Where it showed up: `get_openai_client()` in [llm_provider.py](../llm_provider.py) and `get_settings()` in [config.py](../config.py). Both are called on every single request, but you don't want to reconstruct an OpenAI client or re-parse environment variables every time — `@lru_cache` means the expensive setup happens once, the first time, and every later call is free.
 
+### Exception chaining with `raise ... from ...` (2026-09-19)
+
+Whenever you raise a new exception from inside an `except` block, Python *always* remembers the exception being handled — that's automatic, and shows up in a traceback as "During handling of the above exception, another exception occurred." `__cause__` is different: it's only set when you write `raise NewException(...) from original_exception` explicitly. Doing so changes the traceback wording to "The above exception was the direct cause of the following exception" (a deliberate translation, not an accidental double-fault), and — more usefully — makes the original exception programmatically readable afterward via `caught.__cause__`, so a logger or debugger can recover the real underlying error even though callers only ever catch your normalized type.
+
+Where it showed up: every `except` clause in `open_ai_adapter` ([llm_provider.py](../llm_provider.py)) that maps a raw OpenAI SDK exception onto the project's own `ProviderError` taxonomy — each one uses `raise ProviderXError(str(exc)) from exc` specifically so the real OpenAI exception stays attached and inspectable.
+
+### `dict.get(key, default)` for safe lookups (2026-09-19)
+
+`dict[key]` raises `KeyError` if the key is missing. `dict.get(key)` returns `None` instead — safer, but `None` can still cause problems if you then try to use it as if it were real data. `dict.get(key, default)` returns `default` instead of `None` when the key is missing, and is ignored entirely (you get the real value) when the key *is* present.
+
+Where it showed up: `http_status_mapping.get(status_category, http_status_mapping["unknown_error"])` in [routers/executions.py](../routers/executions.py) — if a future eighth `ProviderError` subclass is ever added and someone forgets to add its category to this mapping, the lookup degrades to a generic response instead of crashing inside the code that's specifically responsible for handling failures gracefully.
+
+### `try / except / else` (2026-09-19)
+
+Code in an `else` block after `try`/`except` only runs if the `try` block completed with *no* exception at all. The practical reason to use it instead of just writing more code at the end of the `try` block: it keeps the `try` scoped to exactly the operation whose failure you're handling. Code that depends on that operation having succeeded belongs in `else`, not the `try` — otherwise, if the `except` clause is ever broadened later (e.g. someone adds a second, wider `except` for logging), code that should never have been "part of the guarded operation" could suddenly start being caught by it too.
+
+Where it showed up: `execute_llm_provider` in [routers/executions.py](../routers/executions.py) — `try` calls `execute_with_retry`, `except ProviderError` persists a failure row, `else` persists the success row. Building the success `Execution` row is deliberately not inside the `try`.
+
 ---
 
 ## SQLAlchemy / ORM
@@ -33,6 +51,12 @@ Where it showed up: discussed while designing `Execution`'s relationships, not y
 `flush()` pushes pending changes (inserts/updates) to the database *within the current open transaction* — the row genuinely exists there and can even be read back (e.g. to get a generated id), but it isn't durable yet. `commit()` is what actually closes out the transaction and makes it permanent. If a session gets closed (`db.close()`) with changes flushed but never committed, they get silently rolled back — it can *look* like it worked (you can read the row back inside the same session) right up until the moment it disappears.
 
 Where it showed up: a real bug in an early draft of `execute_llm_provider` in [routers/executions.py](../routers/executions.py) — it did `add()` → `flush()` → `refresh()` with no `commit()`, so persisted executions would have silently vanished the moment each request ended.
+
+### `server_default` needs a real SQL default, and a new `NOT NULL` column on a populated table needs one (2026-09-19)
+
+`Column(..., nullable=False)` with no `server_default` works fine for a brand-new table, but adding such a column to a table that already has rows fails outright — the database has no value to put in the existing rows and refuses the `ALTER TABLE`. A `server_default` (a real database-level default, not just a Python-level one) fixes this by telling the database what to backfill existing rows with. Separately: for a numeric column, prefer `sa.text("1")` over a bare Python string `"1"` — both actually work (verified directly against Postgres: a bare string renders as `DEFAULT '1'`, which Postgres happily casts to the integer `1`), but `sa.text(...)` is the explicit, dialect-aware way to say "this is raw SQL," matching how this same codebase already does it elsewhere (`Prompt.current_version`) rather than relying on Postgres's implicit string-to-number casting.
+
+Where it showed up: adding `Execution.retry_attempts` (`NOT NULL`, `server_default=sa.text('1')`) to an `executions` table that already had a real row from Step 2's testing — verified the backfill actually landed as `1`, not just that the migration ran.
 
 ---
 
@@ -91,3 +115,25 @@ Where it showed up: hit this directly while regenerating the `executions` table 
 A monotonic clock meant specifically for measuring durations, unlike `time.time()` (wall-clock time, which can jump backward from NTP corrections). Read it immediately before and after the thing you're timing, subtract, and only the code in between is measured — anything outside that window (DB queries before or after) leaks into the number if you place the calls loosely.
 
 Where it showed up: measuring `latency_ms` around only the `open_ai_adapter(...)` call in [routers/executions.py](../routers/executions.py), not the surrounding DB lookups or the persistence write.
+
+---
+
+## AI / LLM Provider Integration
+
+### Provider SDKs often retry internally by default (2026-09-19)
+
+Before assuming your own retry logic is the only thing retrying a failed call, check whether the provider's SDK already retries some failures on its own. The OpenAI Python SDK defaults to `max_retries=2`, silently retrying things like connection errors and 5xx responses before ever raising an exception to your code. If you then add your own retry loop on top without knowing this, "3 attempts" in your own logs or database could actually represent up to 9 real, billed provider calls — a hidden cost multiplier that's invisible unless you go looking for it.
+
+Where it showed up: `OpenAI(..., max_retries=0)` in `get_openai_client()` ([llm_provider.py](../llm_provider.py)), disabling the SDK's own retries so `execute_with_retry`'s bounded loop is the single, observable source of every retry attempt.
+
+### Normalizing provider errors into your own taxonomy (2026-09-19)
+
+A third-party SDK's exception types are an implementation detail of that specific provider — catching them directly throughout your app couples your business logic to that SDK's exact class hierarchy. Instead, map each SDK exception to a small set of your own exception types at the one boundary that talks to the SDK, each carrying the properties your app actually needs to make decisions (here: `retryable: bool`, so a retry loop never needs to know seven different OpenAI class names, and `status_category: str`, so a router can turn any provider failure into the right HTTP response with one dictionary lookup instead of a long `if/elif` chain per exception type).
+
+Where it showed up: `provider_errors.py`'s `ProviderError` hierarchy, populated by `open_ai_adapter`'s `except` chain in [llm_provider.py](../llm_provider.py).
+
+### Exponential backoff with full jitter (2026-09-19)
+
+Retrying a failed call immediately, or after the same fixed delay every time, tends to make things worse under real load — many failed clients all retry at once, hitting the struggling service with a synchronized burst right as it's trying to recover. "Full jitter" backoff fixes this by picking a *random* delay between `0` and a ceiling that grows with each attempt (`min(cap, base * 2^attempt)`), rather than sleeping a fixed or lightly-jittered amount — two clients that failed at the same instant are very unlikely to retry at the same instant.
+
+Where it showed up: `_compute_backoff_delay` in [llm_provider.py](../llm_provider.py), used by `execute_with_retry` between attempts — overridden by the provider's own `Retry-After` header when a `RateLimitError` supplies one, since that's more authoritative than a guess.

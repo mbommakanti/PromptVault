@@ -2,7 +2,7 @@
 
 Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_Engineer_Build_Guide.docx`). One entry per completed step: what was done, how it was verified, and the stop condition that justified moving on.
 
-**Current status: Step 2 complete. Not yet started: Step 3.**
+**Current status: Step 3 complete. Not yet started: Step 4.**
 
 ---
 
@@ -69,8 +69,31 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 
 ---
 
-## Step 3 — Failure taxonomy and retries (not started)
+## Step 3 — Failure taxonomy and retries ✅ (2026-09-19)
 
 **Goal:** Handle LLM-provider failures intentionally instead of treating everything as "500."
+
+**Done:**
+- Added a small internal exception taxonomy (`provider_errors.py`): `ProviderError` base plus six subclasses (`ProviderTimeoutError`, `ProviderConnectionError`, `ProviderRateLimitError`, `ProviderAuthenticationError`, `ProviderServerError`, `ProviderInvalidRequestError`), each carrying a `retryable: bool` and a `status_category: str` class attribute. `ProviderRateLimitError` additionally carries `retry_after: float | None`. This is the same normalization principle already applied to successful responses (`AdapterResponse`) — the OpenAI SDK's own exception types never cross the adapter boundary.
+- `open_ai_adapter` (`llm_provider.py`) now wraps its single `client.responses.create(...)` call in an ordered `except` chain (most-specific-first: `APITimeoutError` → `APIConnectionError` → `RateLimitError` → `AuthenticationError` → `InternalServerError` → `APIStatusError` → `APIError`), mapping each real OpenAI exception to the matching normalized type via `raise Normalized(str(exc)) from exc` — preserving both the real message and explicit exception chaining (`__cause__`). `RateLimitError`'s `Retry-After` header is parsed defensively into `retry_after` (missing or non-numeric header degrades to `None` rather than crashing the handler itself).
+- Discovered the OpenAI SDK retries certain failures internally by default (`max_retries=2`, confirmed in `_constants.py`) before ever raising to the adapter. Disabled it (`OpenAI(..., max_retries=0)` in `get_openai_client()`) so the app's own retry policy is the single, observable source of retry attempts — otherwise a configured "3 attempts" could have silently meant up to 9 real provider calls.
+- Added `execute_with_retry` (`llm_provider.py`): a bounded retry loop wrapping `open_ai_adapter`, retrying only when `exc.retryable`, using full-jitter exponential backoff (`_compute_backoff_delay`, a pure function: `random.uniform(0, min(cap, base * 2**(attempt-1)))`) or the provider's own `Retry-After` value when present (capped at `retry_backoff_max_seconds` either way, since the router runs synchronously in a thread-pool worker and shouldn't block on an unbounded provider-requested wait). Sets `.attempts` on the exception before the final re-raise once the bound is exhausted; returns `(AdapterResponse, attempts)` on success. New settings in `config.py`: `openai_retry_max_attempts` (3), `openai_retry_backoff_base_seconds` (1.0), `openai_retry_backoff_max_seconds` (20.0).
+- Extracted `resolve_execution_config(model, max_tokens, temperature)` (`llm_provider.py`) as a shared pure function — used by `open_ai_adapter` for the real call and by the router's failure path, so "what model/temperature/max_tokens were we attempting" doesn't get duplicated and drift between the two.
+- Migration `41a7ef227a90`: `Execution.output`/`input_tokens`/`output_tokens`/`total_tokens`/`provider_response_id` are now nullable (genuinely unknowable when a call never gets a response — deliberately not defaulted to `0`, which would corrupt future cost/usage aggregates). `model_name`/`temperature`/`max_tokens`/`status` stay `NOT NULL`, populated from `resolve_execution_config` even on failure since that's echoing the attempted request, not fabricating provider behavior. New `retry_attempts` column (`NOT NULL`, `server_default=sa.text('1')`) — verified directly against the live Postgres schema (not just the migration file) that the one pre-existing Step 2 row backfilled correctly to `1`.
+- `routers/executions.py`'s `execute_llm_provider` restructured into `try / except ProviderError as exc / else`: the `except` branch builds and persists a failure `Execution` row (`status=exc.status_category`, `retry_attempts=exc.attempts`, resolved config, all success-only fields `None`) via a shared `build_execution_object(*, ...)` keyword-only helper (also used by the success path), then raises an `HTTPException` via a module-level `status_category -> (http_status, generic_detail_message)` mapping, looked up defensively (`.get(status_category, http_status_mapping["unknown_error"])`) so an unmapped future category degrades to a generic 502 instead of crashing the error-handling path itself. Failure-path messages are deliberately generic and never echo raw provider text — the `auth_error` category in particular never hints at credentials. `latency_ms` is measured around the whole `execute_with_retry` call (including backoff sleep time), not just the provider round-trip, since that's what the API caller actually waited through.
+- Resolves the open question from [ADR-003](decisions/ADR-003-execution-persistence-and-access.md)'s "Revisit When": execution read access stays owner-only (`execution.user_id`) — a failure row is still just an `Execution` row, no new access path was introduced.
+- Fixed `test_executions.py`, which broke when `open_ai_adapter` stopped being imported directly into `routers/executions.py` (all `patch("routers.executions.open_ai_adapter", ...)` repointed to `patch("llm_provider.open_ai_adapter", ...)`, since `execute_with_retry` resolves that name from `llm_provider`'s own module namespace). Reworded the now-stale `test_execute_failure_does_not_persist_execution` (renamed to `test_execute_unexpected_non_provider_error_does_not_persist_execution`) to clarify it locks in permanent behavior for non-`ProviderError` exceptions specifically, not a Step 2 gap. Added 4 new tests: terminal failure persists + fails fast (exactly 1 attempt), retryable failure exhausts at exactly `retry_max_attempts` then persists, a success that needed one retry persists the real attempt count (regression lock — `execute_with_retry`'s tuple return was briefly unpacked incorrectly during development), and a failure row resolves `max_tokens`/`temperature` into their correct columns without swapping them (regression lock for a real bug caught during review).
+- Full suite green: 44/44 passing, 95% overall coverage (`ruff check` clean on the touched files).
+- **Not yet done:** `execute_with_retry`, `_compute_backoff_delay`, and `resolve_execution_config` don't have dedicated unit tests of their own in `test_llm_provider.py` the way `open_ai_adapter` does — their behavior (retry bounding, backoff math, `Retry-After` handling, config resolution) was verified extensively via ad hoc scripts during code review and is exercised indirectly through `test_executions.py`'s router-level failure tests, but isn't locked in as permanent regression coverage at the unit level yet. `llm_provider.py`'s own file coverage is 61%, notably lower than the rest of the codebase, reflecting this gap.
+
+**Shipped as:** not yet committed/pushed — working tree has these changes.
+
+**Stop condition:** Able to explain, without assistance: why retry policy lives in a wrapper around `open_ai_adapter` rather than inside it; why the OpenAI SDK's own default retries had to be explicitly disabled; why terminal errors (auth, invalid request) never enter the backoff path; why a failed execution is still persisted with resolved (not raw-request) config even though no provider response ever came back; and why the HTTP status mapping deliberately never echoes raw provider error text to the caller.
+
+---
+
+## Step 4 — Token and cost accounting (not started)
+
+**Goal:** Make AI cost an observable engineering metric.
 
 Not yet started.

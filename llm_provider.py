@@ -1,12 +1,29 @@
-from functools import lru_cache
 import random
 import time
+from functools import lru_cache
 
-from openai import OpenAI, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError, InternalServerError, APIStatusError, APIError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
 from config import get_settings
+from provider_errors import (
+    ProviderAuthenticationError,
+    ProviderConnectionError,
+    ProviderError,
+    ProviderInvalidRequestError,
+    ProviderRateLimitError,
+    ProviderServerError,
+    ProviderTimeoutError,
+)
 from schemas import AdapterResponse
-from provider_errors import ProviderError, ProviderAuthenticationError, ProviderConnectionError, ProviderInvalidRequestError, ProviderRateLimitError, ProviderServerError, ProviderTimeoutError
 
 
 @lru_cache
@@ -19,20 +36,27 @@ def _compute_backoff_delay(attempt:int,base:float,cap:float):
     delay = random.uniform(0, min(cap, base * 2 ** (attempt - 1)))
     return delay
 
+def resolve_execution_config(*,model:str|None=None,max_tokens:int|None=None,temperature:float|None=None):
+    settings = get_settings()
+    model = settings.openai_default_model if model is None else model
+    temperature = settings.openai_default_temperature if temperature is None else temperature
+    max_tokens = settings.openai_default_max_tokens if max_tokens is None else max_tokens
+    resultant_config = (model,temperature,max_tokens)
+    return resultant_config
 
 def open_ai_adapter(*,input:str,instructions:str,model:str |None = None,
                     max_tokens:int|None=None,temperature:float|None=None,
                     timeout:float|None=None):
-    
+    execution_config = resolve_execution_config(model=model,max_tokens=max_tokens,temperature=temperature)
     open_ai_client = get_openai_client() 
     settings = get_settings()
     try:
         response = open_ai_client.responses.create(
-        model = settings.openai_default_model if model is None else model,
+        model = execution_config[0],
         instructions=instructions,
         input = input,
-        temperature = settings.openai_default_temperature if temperature is None else temperature,
-        max_output_tokens = settings.openai_default_max_tokens if max_tokens is None else max_tokens,
+        temperature = execution_config[1],
+        max_output_tokens = execution_config[2],
         timeout=settings.openai_timeout_seconds if timeout is None else timeout,
         store=False
         )

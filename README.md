@@ -21,8 +21,9 @@ PromptVault provides a backend service where users can create, update, and organ
 - **Rate limiting** — login and signup are limited to 5 requests/minute per IP to reduce brute-force and spam risk
 - **Structured error responses** — a global exception handler returns a consistent JSON error shape across the whole API, including rate-limit (429) responses
 - **LLM execution** — run a saved, immutable prompt version against OpenAI through a normalized provider adapter; returns generated text, completion status, token usage, and the provider's response ID
-- **Execution history** — every execution is persisted as an inspectable, immutable record (resolved model config, input, output, token usage, latency, provider response ID) and retrievable by id, scoped to whoever ran it
-- **Automated test suite** — 40 pytest tests covering auth, ownership, versioning, soft-delete, and LLM execution/persistence (provider calls mocked), run against an isolated in-memory database
+- **Execution history** — every execution is persisted as an inspectable, immutable record (resolved model config, input, output, token usage, latency, provider response ID, retry attempts) and retrievable by id, scoped to whoever ran it
+- **Provider failure handling with bounded retries** — timeouts, connection errors, rate limits, auth failures, and provider 5xx/4xx responses are normalized into an internal taxonomy; transient failures get bounded, jittered exponential backoff (honoring the provider's own `Retry-After` when given), terminal failures fail fast, and every attempt — success or exhausted failure — is persisted with its real attempt count
+- **Automated test suite** — 44 pytest tests covering auth, ownership, versioning, soft-delete, LLM execution/persistence, and provider failure/retry behavior (provider calls mocked), run against an isolated in-memory database
 
 ## Tech Stack
 
@@ -36,7 +37,7 @@ PromptVault provides a backend service where users can create, update, and organ
 - **slowapi** — rate limiting
 - **openai** — LLM provider SDK (Responses API)
 - **pydantic-settings** — typed, validated provider configuration from environment variables
-- **pytest** — automated testing (40 tests, 97% coverage)
+- **pytest** — automated testing (44 tests, 95% coverage)
 - **Docker** — containerized deployment
 - **Railway** — hosting
 
@@ -51,7 +52,8 @@ PromptVault/
 ├── auth.py                  # Password hashing, JWT creation/verification, get_current_user
 ├── rate_limit.py             # Shared slowapi Limiter instance
 ├── config.py                  # Typed provider settings (ProviderSettings, get_settings)
-├── llm_provider.py             # OpenAI provider adapter (open_ai_adapter, get_openai_client)
+├── llm_provider.py             # OpenAI provider adapter, bounded retry loop (open_ai_adapter, execute_with_retry)
+├── provider_errors.py           # Internal provider-failure taxonomy (ProviderError and subclasses)
 ├── routers/
 │   ├── users.py               # Signup, login endpoints
 │   ├── prompts.py              # Prompt CRUD and versioning endpoints
@@ -76,7 +78,9 @@ PromptVault/
 
 **PromptVersion** — id, prompt_id, version_number, content, created_at
 
-**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, created_at
+**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, retry_attempts, created_at
+
+`output`, `input_tokens`, `output_tokens`, `total_tokens`, and `provider_response_id` are nullable — a failed execution never received a response to populate them. `status` holds either a success state (`completed`/`incomplete`) or a failure category (`timeout`, `connection_error`, `rate_limited`, `auth_error`, `provider_error`, `invalid_request`, `unknown_error`). See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
 
 A `Prompt` holds metadata only; the actual prompt text lives in `PromptVersion`, with one-to-many versions per prompt. This keeps content history append-only and avoids any single "current content" field that could fall out of sync with version history.
 
@@ -107,8 +111,8 @@ All endpoints are versioned under `/api/v1`.
 ### Execution (requires authentication)
 | Method | Path | Access | Description |
 |---|---|---|---|
-| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, latency, provider response ID) |
-| GET | `/api/v1/executions/{execution_id}` | executor only | Retrieve one past execution by id. Deliberately **not** the prompt's "owner or published" rule — scoped to whoever ran it, regardless of the prompt's publish state (see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) |
+| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, latency, provider response ID, retry attempts). On a provider failure, retries transient errors with bounded backoff, then persists a failure record and responds with a mapped error status (`422`/`502`/`503`/`504` depending on failure category — see [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md)) instead of a flat `500` |
+| GET | `/api/v1/executions/{execution_id}` | executor only | Retrieve one past execution by id, success or failure. Deliberately **not** the prompt's "owner or published" rule — scoped to whoever ran it, regardless of the prompt's publish state (see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) |
 
 ## Setup
 
@@ -158,7 +162,7 @@ pip install pytest httpx pytest-cov
 pytest --cov=. --cov-report=term-missing
 ```
 
-Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 97% (40 tests).
+Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 95% (44 tests).
 
 ## Running with Docker
 
@@ -178,7 +182,8 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **The OpenAI SDK never leaks past `llm_provider.py`** — the execution route only ever sees a normalized `AdapterResponse`, never a raw provider object. See [ADR-002](docs/decisions/ADR-002-llm-provider-integration.md) for why the Responses API was chosen over Chat Completions, and how stored prompt content vs. per-call input is split.
 - **Executions persist resolved config, not the raw request** — `temperature`/`max_tokens` on a persisted `Execution` reflect what the provider actually used (read back from its response), not the caller's optional request field, which may have been left unset. See [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md).
 - **Execution read access is scoped to the executor, not the prompt owner** — a published prompt makes its *content* readable to anyone, not the private input/output of everyone who's executed it. See ADR-003 for the specific leak this prevents.
-- **Only successful executions are persisted (for now)** — a failed provider call still propagates to the generic 500 handler and writes no row. Deliberately deferred to a dedicated failure-taxonomy step rather than solved ad hoc (see Roadmap).
+- **Every execution attempt is persisted, success or failure** — a failed provider call is normalized into an internal taxonomy (`provider_errors.py`), retried with bounded, jittered backoff if the failure is transient, and persisted with its real attempt count and failure category regardless of outcome. Only a genuinely unexpected, unclassified exception (a bug, not a provider failure) still falls through to the generic 500 handler unpersisted. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
+- **The OpenAI SDK's own built-in retries are disabled** (`max_retries=0`) — the app's bounded retry loop (`execute_with_retry`) is the sole source of retry attempts, so a configured attempt count can't silently multiply against a second, hidden retry layer inside the SDK.
 
 ## Deployment
 
@@ -193,4 +198,5 @@ Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. 
 - ~~Rate limiting on auth endpoints~~ ✅
 - ~~Prompt execution against LLM APIs~~ ✅
 - ~~Execution persistence and history~~ ✅
-- Failure handling and bounded retries for LLM execution
+- ~~Failure handling and bounded retries for LLM execution~~ ✅
+- Token and cost accounting for LLM execution
