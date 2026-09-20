@@ -71,6 +71,7 @@ class Execution(Base):
     max_tokens = Column(Integer,nullable=False)
     input = Column(Text,nullable=False)
     output = Column(Text)
+    error_message = Column(Text,nullable=True)
     status = Column(String, nullable=False)
     incomplete_reason = Column(String,nullable=True)
     input_tokens = Column(Integer)

@@ -20,7 +20,7 @@ http_status_mapping = {
 }
 
 def build_execution_object(*,user_id,prompt_id,prompt_version_id,model_name,temperature,max_tokens,input,output,status,incomplete_reason,
-                           input_tokens,output_tokens,total_tokens,provider_response_id,latency_ms,retry_attempts:int=1):
+                           input_tokens,output_tokens,total_tokens,provider_response_id,latency_ms,retry_attempts:int=1,error_message):
      execution_object = Execution(
         user_id = user_id,
         prompt_id = prompt_id,
@@ -37,7 +37,8 @@ def build_execution_object(*,user_id,prompt_id,prompt_version_id,model_name,temp
         total_tokens=total_tokens,
         provider_response_id=provider_response_id,
         retry_attempts=retry_attempts,
-        latency_ms=latency_ms
+        latency_ms=latency_ms,
+        error_message=error_message
      )
      return execution_object
 
@@ -47,6 +48,7 @@ execution_router = APIRouter(prefix="/api/v1/executions",tags=["executions"])
 @router.post("/{prompt_id}/versions/{version_number}/execute",response_model=ExecutionOut,status_code=status.HTTP_201_CREATED)
 def execute_llm_provider(db:db_dependency,execution_request:ExecutionRequest,current_user:User=Depends(get_current_user),
                          prompt_id:int=Path(gt=0),version_number:int=Path(gt=0)):
+    print("Inside execute_llm_provider")
     owner_exception = HTTPException(
                 status_code=403,
                 detail="Unauthorized access, the prompt you are trying to retrieve belongs to a different owner or is not published"
@@ -86,7 +88,7 @@ def execute_llm_provider(db:db_dependency,execution_request:ExecutionRequest,cur
          failed_execution_object = build_execution_object(
               user_id=current_user.id,prompt_id=prompt_id,prompt_version_id=prompt_version.id,model_name=model_config[0],temperature=model_config[1],max_tokens=model_config[2],
               input=execution_request.input,output=None,status=status_category,
-              incomplete_reason=None,input_tokens=None,output_tokens=None,total_tokens=None,provider_response_id=None,retry_attempts=attempts,latency_ms=latency_ms
+              incomplete_reason=None,input_tokens=None,output_tokens=None,total_tokens=None,provider_response_id=None,retry_attempts=attempts,latency_ms=latency_ms,error_message=str(exc)
          )
          db.add(failed_execution_object)
          db.commit()
@@ -99,7 +101,7 @@ def execute_llm_provider(db:db_dependency,execution_request:ExecutionRequest,cur
                                                             output=adapter_response.model_response,status=adapter_response.response_status,
                                                             incomplete_reason=adapter_response.incomplete_reason,input_tokens=adapter_response.input_tokens,
                                                             output_tokens=adapter_response.output_tokens,total_tokens=adapter_response.total_tokens,provider_response_id=adapter_response.response_id,
-                                                            latency_ms=latency_ms,retry_attempts=number_of_attempts)
+                                                            latency_ms=latency_ms,retry_attempts=number_of_attempts,error_message=None)
         db.add(execution_request_to_create)
         db.commit()
         db.refresh(execution_request_to_create)  

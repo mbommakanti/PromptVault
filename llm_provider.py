@@ -51,6 +51,9 @@ def open_ai_adapter(*,input:str,instructions:str,model:str |None = None,
     open_ai_client = get_openai_client() 
     settings = get_settings()
     try:
+        print("Model is:", model)
+        print("Instructions are:",instructions)
+        print("Max tokens is:",execution_config[2])
         response = open_ai_client.responses.create(
         model = execution_config[0],
         instructions=instructions,
@@ -61,10 +64,13 @@ def open_ai_adapter(*,input:str,instructions:str,model:str |None = None,
         store=False
         )
     except APITimeoutError as exc:
+        print("Error is:", str(exc))
         raise ProviderTimeoutError(str(exc)) from exc
     except APIConnectionError as exc:
+        print("Error is:", str(exc))
         raise ProviderConnectionError(str(exc)) from exc
     except RateLimitError as exc:
+        print("Error is:", str(exc))
         value = exc.response.headers.get("retry-after")
         if value is None:
             retry_after = None
@@ -75,12 +81,16 @@ def open_ai_adapter(*,input:str,instructions:str,model:str |None = None,
                 retry_after = None
         raise ProviderRateLimitError(message=str(exc),retry_after=retry_after) from exc
     except AuthenticationError as exc:
+        print("Error is:", str(exc))
         raise ProviderAuthenticationError(str(exc)) from exc
     except InternalServerError as exc:
+        print("Error is:", str(exc))
         raise ProviderServerError(str(exc)) from exc
     except APIStatusError as exc:
+        print("Error is:", str(exc))
         raise ProviderInvalidRequestError(str(exc)) from exc
     except APIError as exc:
+        print("Error is:", str(exc))
         raise ProviderError(str(exc)) from exc
 
     openai_adapter_output = AdapterResponse (

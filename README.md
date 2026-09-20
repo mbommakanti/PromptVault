@@ -78,9 +78,9 @@ PromptVault/
 
 **PromptVersion** — id, prompt_id, version_number, content, created_at
 
-**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, retry_attempts, created_at
+**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, error_message, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, retry_attempts, created_at
 
-`output`, `input_tokens`, `output_tokens`, `total_tokens`, and `provider_response_id` are nullable — a failed execution never received a response to populate them. `status` holds either a success state (`completed`/`incomplete`) or a failure category (`timeout`, `connection_error`, `rate_limited`, `auth_error`, `provider_error`, `invalid_request`, `unknown_error`). See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
+`output`, `input_tokens`, `output_tokens`, `total_tokens`, and `provider_response_id` are nullable — a failed execution never received a response to populate them. `status` holds either a success state (`completed`/`incomplete`) or a failure category (`timeout`, `connection_error`, `rate_limited`, `auth_error`, `provider_error`, `invalid_request`, `unknown_error`). `error_message` holds the raw provider error text for a failure — stored for internal diagnosis only, deliberately **not** part of `ExecutionOut`, so it's never returned by any API response. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
 
 A `Prompt` holds metadata only; the actual prompt text lives in `PromptVersion`, with one-to-many versions per prompt. This keeps content history append-only and avoids any single "current content" field that could fall out of sync with version history.
 
@@ -184,6 +184,7 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **Execution read access is scoped to the executor, not the prompt owner** — a published prompt makes its *content* readable to anyone, not the private input/output of everyone who's executed it. See ADR-003 for the specific leak this prevents.
 - **Every execution attempt is persisted, success or failure** — a failed provider call is normalized into an internal taxonomy (`provider_errors.py`), retried with bounded, jittered backoff if the failure is transient, and persisted with its real attempt count and failure category regardless of outcome. Only a genuinely unexpected, unclassified exception (a bug, not a provider failure) still falls through to the generic 500 handler unpersisted. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
 - **The OpenAI SDK's own built-in retries are disabled** (`max_retries=0`) — the app's bounded retry loop (`execute_with_retry`) is the sole source of retry attempts, so a configured attempt count can't silently multiply against a second, hidden retry layer inside the SDK.
+- **The raw provider failure reason is persisted, but only for internal use** — `Execution.error_message` stores the real provider error text so a failure can actually be diagnosed later, but it's deliberately excluded from `ExecutionOut`: the API's external response stays generic (see the point above about `auth_error`), while the underlying row still remembers the real cause for anyone with legitimate access to it. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md#update-2026-09-20-the-external-message-decision-had-an-internal-cost).
 
 ## Deployment
 

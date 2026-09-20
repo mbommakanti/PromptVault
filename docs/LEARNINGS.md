@@ -74,6 +74,12 @@ Where it showed up: an early draft of `execute_llm_provider` in [routers/executi
 
 Where it showed up: the same file, while adding the second router for `GET /api/v1/executions/{id}`.
 
+### A dependency can have its own dependency, and either one can short-circuit before your route body ever runs (2026-09-20)
+
+`Depends(...)` chains nest. `get_current_user`'s own signature is `token: str = Depends(oauth2_scheme)` — `oauth2_scheme` is itself a dependency that runs *before* `get_current_user`'s body does, and if it can't find a valid `Authorization` header, it raises its own `401` on the spot, without ever handing control to `get_current_user`. That matters for debugging: a print statement at the very top of `get_current_user` proves nothing if the request never got that far — you have to know a dependency has its own dependency to know where to actually look.
+
+Where it showed up: debugging a `401 "Not authenticated"` on `/execute` via Swagger. The generic message (not the custom `"Could not validate credentials"` that `get_current_user`'s own body raises) plus a silent print statement together confirmed the request was being rejected by `oauth2_scheme` itself — before `get_current_user` ever started — because no token was actually attached to that specific request.
+
 ---
 
 ## Testing
@@ -137,3 +143,19 @@ Where it showed up: `provider_errors.py`'s `ProviderError` hierarchy, populated 
 Retrying a failed call immediately, or after the same fixed delay every time, tends to make things worse under real load — many failed clients all retry at once, hitting the struggling service with a synchronized burst right as it's trying to recover. "Full jitter" backoff fixes this by picking a *random* delay between `0` and a ceiling that grows with each attempt (`min(cap, base * 2^attempt)`), rather than sleeping a fixed or lightly-jittered amount — two clients that failed at the same instant are very unlikely to retry at the same instant.
 
 Where it showed up: `_compute_backoff_delay` in [llm_provider.py](../llm_provider.py), used by `execute_with_retry` between attempts — overridden by the provider's own `Retry-After` header when a `RateLimitError` supplies one, since that's more authoritative than a guess.
+
+### Provider errors often carry structured detail beyond the message string (2026-09-20)
+
+A provider SDK's exception isn't just a string to print — OpenAI's `APIError` exposes `.param` (which specific request field got rejected) and `.code` alongside `.message`, pulled straight from the response body. Reading `exc.param` tells you programmatically *which field* was the problem, without having to parse or pattern-match the human-readable message text.
+
+Where it showed up: diagnosing a real `422` on `/execute` — the persisted `status` (`invalid_request`) said only *that* something about the request was rejected; printing `str(exc)` revealed the underlying `openai.BadRequestError`, whose `param` field was literally `"temperature"` — the specific model being tested doesn't accept that parameter at all. This is also the field a future fix would key off of, rather than pattern-matching the message text.
+
+---
+
+## Debugging Techniques
+
+### Trust the raw error over a coarse category when a generic response isn't enough to diagnose (2026-09-20)
+
+A well-designed error taxonomy (categories, HTTP status codes) is deliberately coarser than the full truth — that's the point, it's meant to give a *caller* a safe, stable, actionable response. But that same coarseness means the category alone can't always tell *you*, the developer, why something actually failed. When a generic failure category isn't enough to understand a real bug, get the raw, unprocessed error text at the exact point it was first caught (a temporary print or log statement placed there, not several layers downstream where it's already been generalized) before guessing at a root cause from the category name alone.
+
+Where it showed up: debugging a `422 "the request was rejected by the model provider"` from `/execute`. The category (`invalid_request`) was consistent with several different real causes (an invalid model name was the first guess, and was wrong) — only printing `str(exc)` at the point `open_ai_adapter` actually catches the OpenAI exception revealed the real, specific cause (`"Unsupported parameter: 'temperature'..."`). Guessing from the category alone would have led to fixing the wrong thing.

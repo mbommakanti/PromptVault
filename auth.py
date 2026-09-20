@@ -44,6 +44,7 @@ def get_current_user(db:db_dependency, token:str=Depends(oauth2_scheme)):
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"}
     )
+    print("Inside Get current user")
     try:
         payload =jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
