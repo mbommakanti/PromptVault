@@ -8,6 +8,8 @@ PromptVault is being evolved incrementally into **PromptOps**, an evaluation-fir
 
 > Hosted on a free tier — the first request after a period of inactivity can take ~30–60s while the service wakes up.
 
+*Built as a learning project — backend written by me, with AI as tutor and reviewer. See [How This Was Built](#how-this-was-built).*
+
 ## Overview
 
 PromptVault solves a common problem for anyone working seriously with LLMs: prompts end up scattered across notes apps, Slack messages, and code comments, with no single place to store them, track how they've evolved, or control who can see what.
