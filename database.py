@@ -9,7 +9,7 @@ load_dotenv()
 #SQLALCHEMY_DATABASE_URI = "postgresql://postgres:admin@localhost:5432/PromptVaultDB"
 SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
 
-engine = create_engine(SQLALCHEMY_DATABASE_URI)
+engine = create_engine(SQLALCHEMY_DATABASE_URI,pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

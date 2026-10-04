@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from starlette import status
 
 from auth import db_dependency, get_current_user
@@ -8,6 +8,7 @@ from llm_provider import execute_with_retry, resolve_execution_config
 from models import Execution, Prompt, PromptVersion, User
 from pricing import calculate_cost
 from provider_errors import ProviderError
+from rate_limit import limiter
 from schemas import ExecutionOut, ExecutionRequest
 
 http_status_mapping = {
@@ -48,9 +49,9 @@ router = APIRouter(prefix="/api/v1/prompts", tags=["executions"])
 execution_router = APIRouter(prefix="/api/v1/executions",tags=["executions"])
 
 @router.post("/{prompt_id}/versions/{version_number}/execute",response_model=ExecutionOut,status_code=status.HTTP_201_CREATED)
-def execute_llm_provider(db:db_dependency,execution_request:ExecutionRequest,current_user:User=Depends(get_current_user),
+@limiter.limit("5/minute")
+def execute_llm_provider(request:Request,db:db_dependency,execution_request:ExecutionRequest,current_user:User=Depends(get_current_user),
                          prompt_id:int=Path(gt=0),version_number:int=Path(gt=0)):
-    print("Inside execute_llm_provider")
     owner_exception = HTTPException(
                 status_code=403,
                 detail="Unauthorized access, the prompt you are trying to retrieve belongs to a different owner or is not published"
