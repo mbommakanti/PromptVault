@@ -12,6 +12,24 @@ A decorator that makes a function remember its own past results. The first time 
 
 Where it showed up: `get_openai_client()` in [llm_provider.py](../llm_provider.py) and `get_settings()` in [config.py](../config.py). Both are called on every single request, but you don't want to reconstruct an OpenAI client or re-parse environment variables every time — `@lru_cache` means the expensive setup happens once, the first time, and every later call is free.
 
+### Commas in a numeric literal silently build a tuple, not a syntax error (2026-10-04)
+
+Python has no comma digit-separator for numbers — only underscores (`1_000_000`) are valid. Writing `x / 1,000,000` doesn't divide by a million; it parses as the tuple `(x / 1, 000, 000)`, because `/` binds tighter than the comma. The expression is completely legal Python, so nothing crashes at the point of the mistake — the function just silently returns a 3-element tuple instead of a number, and the bug only surfaces later, wherever that return value gets used as if it were a single numeric result.
+
+Where it showed up: a first draft of `calculate_cost` in [pricing.py](../pricing.py) — `total_cost = (...) / 1,000,000` returned `(unscaled_value, 0, 0)` instead of dividing by a million. Caught by writing the golden test (a hand-worked example with a known expected answer) before trusting the function, not by the code raising an error on its own.
+
+### `Decimal(float)` inherits the float's own imprecision — convert through `str()` first (2026-10-04)
+
+Wrapping a `float` in `Decimal(...)` doesn't give you a clean decimal number — it gives you the *exact* (and often ugly) binary value that float already rounded to. `Decimal(0.15)` is `Decimal('0.1499999999999999944488848768742172978818416595458984375')`, not `Decimal('0.15')`. For `Decimal` to actually buy you exact decimal arithmetic, the conversion has to go through a string — `Decimal(str(0.15))` — so Python parses the literal `"0.15"` as a decimal directly, instead of asking "what binary float does 0.15 round to, then treat that as exact."
+
+Where it showed up: `calculate_cost` in [pricing.py](../pricing.py) converts each model's per-1M-token price with `Decimal(str(price))` before multiplying by token counts — the whole reason for using `Decimal` over `float` for money (avoiding rounding drift once many rows get summed later) would have been silently defeated by converting the wrong way.
+
+### `Decimal.quantize()` takes a shaped exponent and a rounding constant, not two integers (2026-10-04)
+
+`quantize()` doesn't take "total digits, decimal places" the way you'd describe a DB column's `NUMERIC(12, 8)`. The first argument has to be a `Decimal` *already shaped* like the precision you want (`Decimal("0.00000001")` means "round to 8 decimal places"), and the second (`rounding=`) must be one of the actual `decimal.ROUND_*` constants (e.g. `ROUND_HALF_UP`) — not a bare number.
+
+Where it showed up: `calculate_cost` in [pricing.py](../pricing.py) — an early draft called `total_cost.quantize(12, 8)`, which raised `TypeError` immediately (`8` isn't a valid rounding mode). Fixed to `total_cost.quantize(Decimal("0.00000001"), rounding=decimal.ROUND_HALF_UP)`.
+
 ### Exception chaining with `raise ... from ...` (2026-09-19)
 
 Whenever you raise a new exception from inside an `except` block, Python *always* remembers the exception being handled — that's automatic, and shows up in a traceback as "During handling of the above exception, another exception occurred." `__cause__` is different: it's only set when you write `raise NewException(...) from original_exception` explicitly. Doing so changes the traceback wording to "The above exception was the direct cause of the following exception" (a deliberate translation, not an accidental double-fault), and — more usefully — makes the original exception programmatically readable afterward via `caught.__cause__`, so a logger or debugger can recover the real underlying error even though callers only ever catch your normalized type.
@@ -52,6 +70,12 @@ Where it showed up: discussed while designing `Execution`'s relationships, not y
 
 Where it showed up: a real bug in an early draft of `execute_llm_provider` in [routers/executions.py](../routers/executions.py) — it did `add()` → `flush()` → `refresh()` with no `commit()`, so persisted executions would have silently vanished the moment each request ended.
 
+### `Numeric` vs `Float` for storing money (2026-10-04)
+
+SQLAlchemy's `Float` maps to Postgres `double precision` — a binary floating-point type, same precision limitation as Python's `float`. It's fine for latency or temperature, where a tiny rounding error doesn't matter. It's wrong for currency: storing many small imprecise values and later `SUM()`-ing them across rows accumulates real, visible drift, even though any single row looks fine. `Numeric(precision, scale)` maps to Postgres's `NUMERIC` — exact fixed-point storage, no binary rounding — the storage-layer equivalent of using `Decimal` instead of `float` in the Python calculation that produces the value in the first place.
+
+Where it showed up: `Execution.cost_usd = Column(Numeric(12, 8))` in [models.py](../models.py) — 12 total digits, 8 after the decimal, matching the precision `calculate_cost` already rounds to in [pricing.py](../pricing.py).
+
 ### `server_default` needs a real SQL default, and a new `NOT NULL` column on a populated table needs one (2026-09-19)
 
 `Column(..., nullable=False)` with no `server_default` works fine for a brand-new table, but adding such a column to a table that already has rows fails outright — the database has no value to put in the existing rows and refuses the `ALTER TABLE`. A `server_default` (a real database-level default, not just a Python-level one) fixes this by telling the database what to backfill existing rows with. Separately: for a numeric column, prefer `sa.text("1")` over a bare Python string `"1"` — both actually work (verified directly against Postgres: a bare string renders as `DEFAULT '1'`, which Postgres happily casts to the integer `1`), but `sa.text(...)` is the explicit, dialect-aware way to say "this is raw SQL," matching how this same codebase already does it elsewhere (`Prompt.current_version`) rather than relying on Postgres's implicit string-to-number casting.
@@ -80,6 +104,12 @@ Where it showed up: the same file, while adding the second router for `GET /api/
 
 Where it showed up: debugging a `401 "Not authenticated"` on `/execute` via Swagger. The generic message (not the custom `"Could not validate credentials"` that `get_current_user`'s own body raises) plus a silent print statement together confirmed the request was being rejected by `oauth2_scheme` itself — before `get_current_user` ever started — because no token was actually attached to that specific request.
 
+### Pydantic serializes `Decimal` fields as JSON strings, not bare numbers (2026-10-04)
+
+JSON itself has no decimal type — only floats. A naive numeric API field risks silently losing precision the moment a client's JSON parser turns it into a double. Pydantic avoids that for `Decimal`-typed fields by serializing them as quoted strings in the response body (e.g. `"0.00002260"`, not `0.00002260`), so the exact value a client receives is whatever was actually computed, not whatever the nearest representable float happens to be.
+
+Where it showed up: `ExecutionOut.cost_usd: Decimal | None` in `schemas.py` — confirmed by hitting the real `/execute` endpoint and inspecting the raw JSON response body, not just the Python object, specifically because this behavior isn't obvious from the type annotation alone and was worth verifying rather than assuming.
+
 ---
 
 ## Testing
@@ -89,6 +119,12 @@ Where it showed up: debugging a `401 "Not authenticated"` on `/execute` via Swag
 A hand-built test fixture (a `SimpleNamespace` standing in for a real API response, or a helper that constructs a Pydantic model with hardcoded defaults) encodes an assumption about what fields exist at the time it was written. When you later add a required field to the real schema, every fixture built before that change is now incomplete — tests fail not because the new code is wrong, but because the fixture hasn't caught up. The fix is updating the fixture's defaults, not the production code.
 
 Where it showed up: adding `temperature`/`max_tokens` to `AdapterResponse` broke `_fake_openai_response()` in [test_llm_provider.py](../test_llm_provider.py) and `_fake_adapter_result()` in [test_executions.py](../test_executions.py) — both predated the new fields.
+
+### Pin at least one golden test against a real recorded result, not only hand-built fixtures (2026-10-04)
+
+A hand-worked example (compute the expected answer yourself, assert the function matches) proves the *logic* is right in isolation, but it can't catch an integration mistake that only shows up against real data shapes — a real provider response field, a real stored string format. Adding a second test pinned to an actual row already sitting in the database closes that gap: it fails if the calculation logic breaks, *and* it fails if some real-world detail the hand fixture didn't happen to cover (a dated model-name suffix, a field format) changes underneath it.
+
+Where it showed up: `test_calculate_cost_matches_real_billed_execution` in [test_pricing.py](../test_pricing.py) — pinned to the exact `model_name`/token counts/`cost_usd` of a real execution already in the dev DB (`gpt-4.1-nano-2025-04-14`, prompt_id=4, execution id=6), alongside a separate hand-worked-example test using invented numbers.
 
 ---
 
@@ -105,6 +141,12 @@ Where it showed up: `Execution.temperature`/`Execution.max_tokens` in [routers/e
 When one resource (an `Execution`) is created *through* another resource (a `Prompt`) but contains its own private data (a specific user's input/output), read access should be scoped to whoever actually generated that data — not to whoever owns the resource it was created through. Copy-pasting an existing ownership check from a related endpoint can silently create a privacy leak if the two resources don't actually have the same owner in every case.
 
 Where it showed up: `GET /api/v1/executions/{id}` checks `execution.user_id`, deliberately not `prompt.owner_id` — a published prompt can be executed by someone other than its owner, and that executor's input/output shouldn't become readable to the prompt owner just because they own the prompt. See [ADR-003](decisions/ADR-003-execution-persistence-and-access.md).
+
+### A function called unconditionally from a shared call site must handle every input state that call site can actually produce (2026-10-04)
+
+It's tempting to write a function against the "normal" case you had in mind (a known model, real token counts) and only handle the one edge case you explicitly thought of (unknown model → `None`). But if the function gets called from one shared spot that's invoked across multiple different branches — a success path *and* a failure path, say — it has to handle every input shape every one of those branches can actually pass, not just the shape the happy path produces. The failure branch already had a legitimate reason to pass `None` token counts (a call that never got a response can't have usage numbers); the bug wasn't that `None` was unexpected input, it was that the function was only ever tested against the branch that doesn't produce it.
+
+Where it showed up: `calculate_cost` in [pricing.py](../pricing.py), called unconditionally from `build_execution_object` in [routers/executions.py](../../routers/executions.py) on both the success and failure branches of `execute_llm_provider`. It handled "unpriced model" correctly from the start but didn't handle `None` tokens until the failure branch's real call pattern was checked directly — before that, any failure against a *known* model would have raised `TypeError` inside the exception handler itself.
 
 ---
 

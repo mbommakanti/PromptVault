@@ -6,6 +6,7 @@ from starlette import status
 from auth import db_dependency, get_current_user
 from llm_provider import execute_with_retry, resolve_execution_config
 from models import Execution, Prompt, PromptVersion, User
+from pricing import calculate_cost
 from provider_errors import ProviderError
 from schemas import ExecutionOut, ExecutionRequest
 
@@ -38,6 +39,7 @@ def build_execution_object(*,user_id,prompt_id,prompt_version_id,model_name,temp
         provider_response_id=provider_response_id,
         retry_attempts=retry_attempts,
         latency_ms=latency_ms,
+        cost_usd = calculate_cost(model_name,input_tokens,output_tokens),
         error_message=error_message
      )
      return execution_object

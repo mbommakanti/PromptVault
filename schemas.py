@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -117,6 +118,7 @@ class ExecutionOut(BaseModel):
     total_tokens:int|None
     provider_response_id:str|None
     latency_ms:int
+    cost_usd:Decimal|None
     retry_attempts:int
     created_at:datetime
 

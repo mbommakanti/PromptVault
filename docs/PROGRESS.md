@@ -2,7 +2,7 @@
 
 Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_Engineer_Build_Guide.docx`). One entry per completed step: what was done, how it was verified, and the stop condition that justified moving on.
 
-**Current status: Step 3 complete. Not yet started: Step 4.**
+**Current status: Step 4 complete. Not yet started: Step 5.**
 
 ---
 
@@ -97,8 +97,25 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 
 ---
 
-## Step 4 — Token and cost accounting (not started)
+## Step 4 — Token and cost accounting ✅ (2026-10-04)
 
 **Goal:** Make AI cost an observable engineering metric.
 
-Not yet started.
+**Done:**
+- Added `pricing.py`: a static per-model pricing dict (`input_per_1m`/`output_per_1m`, USD per 1M tokens), `normalize_model_name(model_name)`, and `calculate_cost(model_name, input_tokens, output_tokens)`. Deliberately a standalone module rather than living in `config.py` (settings/env-var loading, not business logic) or `llm_provider.py` (OpenAI-specific adapter, no SDK dependency here) — matches the build guide's own `HTTP route → application/service logic → provider/repository boundary → concrete adapter` boundary rule, and keeps it importable by future evaluation-run code (Step 12), not just this one router.
+- `calculate_cost` returns `None` (not a fabricated `0`) when either the model is unpriced or either token count is missing — the same "don't invent a fact you don't have" discipline Step 2/3 already applied to `output_tokens`/`total_tokens`.
+- `normalize_model_name` strips a trailing OpenAI dated-snapshot suffix (`-YYYY-MM-DD`) before dict lookup — confirmed necessary, not theoretical: querying the real dev DB showed `Execution.model_name` stores dated snapshots (`gpt-4o-mini-2024-07-18`) for some calls and bare aliases for others, and a bare dict lookup would have silently returned `None` for every dated row.
+- Migration `950e42646281_add_execution_cost_usd.py`: `Execution.cost_usd` as `Numeric(12, 8)` (nullable) — `Numeric`, not `Float`, specifically so cost can be summed across many rows later without binary-floating-point drift (the same reasoning applied to the calculation itself: prices are converted via `Decimal(str(price))`, not `Decimal(price)`, to avoid baking in a float's imprecise binary value; the final result is `.quantize()`d to the column's 8-decimal scale with `ROUND_HALF_UP`).
+- Wired into `build_execution_object` in [routers/executions.py](../../routers/executions.py) — called unconditionally for both the success and failure branches (one call site, not duplicated per branch).
+- Added `ExecutionOut.cost_usd: Decimal | None` in `schemas.py`. Verified against a real response body (not just the Python object) that Pydantic serializes it as a JSON *string* (e.g. `"0.00002260"`), not a bare float — preserving exact precision over the wire instead of silently truncating it the way a native JSON number would.
+- **Three real bugs found and fixed during review, each caught before being trusted:**
+  1. `total_cost = (...) / 1,000,000` — Python has no comma digit-separator syntax; this silently parsed as a 3-element tuple (`(expr/1, 0, 0)`), not division by a million. Caught by writing the golden test before trusting the function.
+  2. `decimal(...)` called the imported `decimal` *module* instead of `decimal.Decimal`, and later `total_cost.quantize(12, 8)` passed `quantize()` two raw ints instead of a `Decimal`-shaped exponent and a rounding-mode constant — both reproduced directly before being fixed.
+  3. `build_execution_object` calls `calculate_cost` unconditionally, including on the failure path where `input_tokens`/`output_tokens` are deliberately `None` — `calculate_cost` didn't originally guard against `None` tokens, so any failure against a *known, priced* model would have raised `TypeError` **inside Step 3's own exception handler**, before it could persist the failure row or return the intended HTTP status. Reproduced directly (`calculate_cost('gpt-4o-mini', None, None)` → `TypeError`), fixed by returning `None` for missing token counts the same way an unpriced model does.
+- Verified end-to-end against a real billed execution (`prompt_id=4`, execution `id=6`, model `gpt-4.1-nano-2025-04-14`, 70 input / 39 output tokens): hand-calculated cost `0.00002260` matched the persisted `cost_usd` exactly.
+- Added `test_pricing.py` (11 cases): the hand-worked example, a regression lock pinned to the real billed execution above (not just a synthetic fixture), unpriced-model → `None`, each of the three `None`-token permutations (regression lock for bug #3), a zero-token boundary, an asymmetric-pricing model (`gpt-5.2-pro`, $21 vs $168 per 1M) with all tokens isolated to one side to catch an input/output rate swap, and a scale/quantization check.
+- Full suite green: 55/55 passing (44 pre-existing + 11 new); `ruff check` clean on `pricing.py`/`test_pricing.py`.
+
+**Shipped as:** not yet committed/pushed — working tree has these changes.
+
+**Stop condition:** Able to explain, without assistance: why cost is computed with `Decimal` (converted via `str()`, not directly from `float`) rather than plain `float` arithmetic; why an unpriced model and a missing token count both resolve to `None` rather than `0` or a crash; why `model_name` needed normalization before a pricing lookup, with the specific dated-vs-bare-alias evidence from the real DB; and why `calculate_cost` needed to handle `None` tokens even though the only call site today already guards against it elsewhere in spirit.

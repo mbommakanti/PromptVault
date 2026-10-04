@@ -78,9 +78,11 @@ PromptVault/
 
 **PromptVersion** — id, prompt_id, version_number, content, created_at
 
-**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, error_message, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, retry_attempts, created_at
+**Execution** — id, user_id, prompt_id, prompt_version_id, model_name, temperature, max_tokens, input, output, error_message, status, incomplete_reason, input_tokens, output_tokens, total_tokens, provider_response_id, latency_ms, cost_usd, retry_attempts, created_at
 
-`output`, `input_tokens`, `output_tokens`, `total_tokens`, and `provider_response_id` are nullable — a failed execution never received a response to populate them. `status` holds either a success state (`completed`/`incomplete`) or a failure category (`timeout`, `connection_error`, `rate_limited`, `auth_error`, `provider_error`, `invalid_request`, `unknown_error`). `error_message` holds the raw provider error text for a failure — stored for internal diagnosis only, deliberately **not** part of `ExecutionOut`, so it's never returned by any API response. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
+`output`, `input_tokens`, `output_tokens`, `total_tokens`, `provider_response_id`, and `cost_usd` are nullable — a failed execution never received a response to populate them. `status` holds either a success state (`completed`/`incomplete`) or a failure category (`timeout`, `connection_error`, `rate_limited`, `auth_error`, `provider_error`, `invalid_request`, `unknown_error`). `error_message` holds the raw provider error text for a failure — stored for internal diagnosis only, deliberately **not** part of `ExecutionOut`, so it's never returned by any API response. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
+
+`cost_usd` is computed from the execution's real token usage against a static per-model pricing table (`pricing.py`) and stored as an exact `Numeric(12, 8)` value — never a `Float` — to avoid binary floating-point drift once costs get summed across many rows. It's computed once at execution time and frozen on the row, not recomputed later from a live price, so historical cost stays accurate even if pricing changes going forward.
 
 A `Prompt` holds metadata only; the actual prompt text lives in `PromptVersion`, with one-to-many versions per prompt. This keeps content history append-only and avoids any single "current content" field that could fall out of sync with version history.
 
@@ -111,7 +113,7 @@ All endpoints are versioned under `/api/v1`.
 ### Execution (requires authentication)
 | Method | Path | Access | Description |
 |---|---|---|---|
-| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, latency, provider response ID, retry attempts). On a provider failure, retries transient errors with bounded backoff, then persists a failure record and responds with a mapped error status (`422`/`502`/`503`/`504` depending on failure category — see [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md)) instead of a flat `500` |
+| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, estimated cost, latency, provider response ID, retry attempts). On a provider failure, retries transient errors with bounded backoff, then persists a failure record and responds with a mapped error status (`422`/`502`/`503`/`504` depending on failure category — see [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md)) instead of a flat `500` |
 | GET | `/api/v1/executions/{execution_id}` | executor only | Retrieve one past execution by id, success or failure. Deliberately **not** the prompt's "owner or published" rule — scoped to whoever ran it, regardless of the prompt's publish state (see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) |
 
 ## Setup
@@ -162,7 +164,7 @@ pip install pytest httpx pytest-cov
 pytest --cov=. --cov-report=term-missing
 ```
 
-Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 95% (44 tests).
+Tests run against an isolated in-memory SQLite database, never touching real data. Rate limiting is disabled during tests (`limiter.enabled = False` in `conftest.py`) so test-suite request volume doesn't trigger the same limits real abuse would. LLM execution tests mock the OpenAI client entirely — no real network calls or cost. Current coverage: 95% (55 tests).
 
 ## Running with Docker
 
@@ -185,6 +187,8 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **Every execution attempt is persisted, success or failure** — a failed provider call is normalized into an internal taxonomy (`provider_errors.py`), retried with bounded, jittered backoff if the failure is transient, and persisted with its real attempt count and failure category regardless of outcome. Only a genuinely unexpected, unclassified exception (a bug, not a provider failure) still falls through to the generic 500 handler unpersisted. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md).
 - **The OpenAI SDK's own built-in retries are disabled** (`max_retries=0`) — the app's bounded retry loop (`execute_with_retry`) is the sole source of retry attempts, so a configured attempt count can't silently multiply against a second, hidden retry layer inside the SDK.
 - **The raw provider failure reason is persisted, but only for internal use** — `Execution.error_message` stores the real provider error text so a failure can actually be diagnosed later, but it's deliberately excluded from `ExecutionOut`: the API's external response stays generic (see the point above about `auth_error`), while the underlying row still remembers the real cause for anyone with legitimate access to it. See [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md#update-2026-09-20-the-external-message-decision-had-an-internal-cost).
+- **Cost is computed with `Decimal`, stored as `Numeric`, never `Float`** — token counts are exact (provider-reported), but the per-token price has to be converted via `Decimal(str(price))` rather than `Decimal(price)` to avoid inheriting a float's own binary imprecision; the result is persisted in a `Numeric(12, 8)` column for the same reason, so summing cost across many executions later doesn't accumulate rounding drift. A model's provider-reported `model_name` sometimes includes a dated snapshot suffix (e.g. `gpt-4o-mini-2024-07-18`) and sometimes doesn't, so it's normalized before the pricing lookup — confirmed against real stored rows, not assumed.
+- **An execution's cost is unknown (`null`), never fabricated, when it can't be determined** — an unpriced model or a failed call with no token usage both resolve to `cost_usd = null` rather than `0`, the same discipline already applied to `output_tokens`/`total_tokens` on a failed execution.
 
 ## Deployment
 
@@ -200,4 +204,4 @@ Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. 
 - ~~Prompt execution against LLM APIs~~ ✅
 - ~~Execution persistence and history~~ ✅
 - ~~Failure handling and bounded retries for LLM execution~~ ✅
-- Token and cost accounting for LLM execution
+- ~~Token and cost accounting for LLM execution~~ ✅

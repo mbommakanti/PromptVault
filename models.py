@@ -7,6 +7,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -79,6 +80,7 @@ class Execution(Base):
     total_tokens = Column(Integer)
     provider_response_id = Column(String)
     latency_ms = Column(Integer,nullable=False)
+    cost_usd = Column(Numeric(12,8))
     retry_attempts = Column(Integer,nullable=False,server_default=sa.text("1"))
     created_at = Column(DateTime, nullable=False,server_default=func.now())
 
