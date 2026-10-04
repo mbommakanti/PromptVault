@@ -217,6 +217,16 @@ Live at [promptops-api.bommakantimaneesh.dev](https://promptops-api.bommakantima
 
 Previously deployed on Railway; moved to Render + Neon to run on free tiers.
 
+## How This Was Built
+
+This is a learning project, and I built it with AI assistance deliberately rather than around it.
+
+- **Backend logic is written by me.** For each feature, I used [Claude Code](https://claude.com/claude-code) as a tutor and reviewer: it explained the concept and design options first, I implemented it, and it reviewed my code for bugs, edge cases, and design issues. Several real bugs were caught this way — they're written up in [docs/LEARNINGS.md](docs/LEARNINGS.md).
+- **AI helped draft supporting material** — documentation (this README, ADRs, progress notes) and some of the tests. I reviewed all of it and can explain every design decision and test case.
+- **The frontend (planned) will be AI-generated** against the real backend API, since the learning focus of this project is the backend and LLM engineering.
+
+Design decisions and their trade-offs are recorded in [docs/decisions/](docs/decisions/).
+
 ## Roadmap
 
 - ~~Global exception handling with a structured JSON error contract~~ ✅
