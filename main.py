@@ -5,7 +5,20 @@ from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 from routers import executions, prompts, users
 
-app = FastAPI()
+app = FastAPI(
+    title="PromptOps API",
+    version="0.4.0",
+    description=(
+        "Prompt versioning and observable LLM execution — evolving from PromptVault into an "
+        "evaluation-first LLM engineering platform.\n\n"
+        "Every execution is persisted with its resolved model config, token usage, cost, latency, "
+        "retry attempts and failure category.\n\n"
+        "**Getting started:** sign up via `POST /api/v1/users/signup`, then click **Authorize** "
+        "and log in with your username and password.\n\n"
+        "Hosted on a free tier — the first request after a period of inactivity can take ~30–60s.\n\n"
+        "[Source on GitHub](https://github.com/mbommakanti/PromptVault)"
+    ),
+)
 
 app.state.limiter = limiter
 

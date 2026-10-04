@@ -1,8 +1,12 @@
-# PromptVault
+# PromptVault → PromptOps
 
-A FastAPI backend for storing, versioning, and retrieving LLM prompts — with JWT authentication and ownership-based access control.
+A FastAPI backend for storing, versioning, and executing LLM prompts — with JWT authentication, ownership-based access control, and observable LLM execution (token usage, cost, latency, retries, and failure categories persisted for every call).
 
-**Live demo:** [promptvault-production-3160.up.railway.app/docs](https://promptvault-production-3160.up.railway.app/docs)
+PromptVault is being evolved incrementally into **PromptOps**, an evaluation-first LLM engineering platform: the goal is to answer *"why is this prompt/model configuration the one we should ship?"* with measured evidence rather than manual eyeballing.
+
+**Live demo:** [promptops-api.bommakantimaneesh.dev/docs](https://promptops-api.bommakantimaneesh.dev/docs)
+
+> Hosted on a free tier — the first request after a period of inactivity can take ~30–60s while the service wakes up.
 
 ## Overview
 
@@ -18,12 +22,13 @@ PromptVault provides a backend service where users can create, update, and organ
 - **Soft deletes** — deleted prompts are preserved (not destroyed) and excluded from normal queries
 - **Publish/unpublish toggle** — control whether a prompt is private or shared
 - **API versioning** — all routes live under `/api/v1`, so future breaking changes can ship under `/api/v2` without disrupting existing clients
-- **Rate limiting** — login and signup are limited to 5 requests/minute per IP to reduce brute-force and spam risk
+- **Rate limiting** — login, signup, and LLM execution are limited to 5 requests/minute per IP, reducing brute-force/spam risk and capping how fast anyone can spend provider credits
 - **Structured error responses** — a global exception handler returns a consistent JSON error shape across the whole API, including rate-limit (429) responses
 - **LLM execution** — run a saved, immutable prompt version against OpenAI through a normalized provider adapter; returns generated text, completion status, token usage, and the provider's response ID
 - **Execution history** — every execution is persisted as an inspectable, immutable record (resolved model config, input, output, token usage, latency, provider response ID, retry attempts) and retrievable by id, scoped to whoever ran it
 - **Provider failure handling with bounded retries** — timeouts, connection errors, rate limits, auth failures, and provider 5xx/4xx responses are normalized into an internal taxonomy; transient failures get bounded, jittered exponential backoff (honoring the provider's own `Retry-After` when given), terminal failures fail fast, and every attempt — success or exhausted failure — is persisted with its real attempt count
-- **Automated test suite** — 44 pytest tests covering auth, ownership, versioning, soft-delete, LLM execution/persistence, and provider failure/retry behavior (provider calls mocked), run against an isolated in-memory database
+- **Token and cost accounting** — every execution records its estimated cost in USD, computed from real provider-reported token usage against a static per-model pricing table, stored as an exact decimal (never a float)
+- **Automated test suite** — 55 pytest tests covering auth, ownership, versioning, soft-delete, LLM execution/persistence, provider failure/retry behavior, and cost calculation (provider calls mocked), run against an isolated in-memory database
 
 ## Tech Stack
 
@@ -31,15 +36,17 @@ PromptVault provides a backend service where users can create, update, and organ
 - **SQLAlchemy** — ORM
 - **Alembic** — database migrations
 - **Pydantic** — request/response validation
-- **PostgreSQL** — database (production, via Railway)
+- **PostgreSQL** — database (production, via Neon)
 - **python-jose** — JWT encoding/decoding
 - **passlib (bcrypt)** — password hashing
 - **slowapi** — rate limiting
 - **openai** — LLM provider SDK (Responses API)
 - **pydantic-settings** — typed, validated provider configuration from environment variables
-- **pytest** — automated testing (44 tests, 95% coverage)
+- **pytest** — automated testing (55 tests, 95% coverage)
 - **Docker** — containerized deployment
-- **Railway** — hosting
+- **Render** — hosting (Docker web service)
+- **Neon** — managed serverless PostgreSQL
+- **Cloudflare** — DNS for the custom domain
 
 ## Project Structure
 
@@ -54,6 +61,7 @@ PromptVault/
 ├── config.py                  # Typed provider settings (ProviderSettings, get_settings)
 ├── llm_provider.py             # OpenAI provider adapter, bounded retry loop (open_ai_adapter, execute_with_retry)
 ├── provider_errors.py           # Internal provider-failure taxonomy (ProviderError and subclasses)
+├── pricing.py                    # Static per-model pricing table and cost calculation (calculate_cost)
 ├── routers/
 │   ├── users.py               # Signup, login endpoints
 │   ├── prompts.py              # Prompt CRUD and versioning endpoints
@@ -65,6 +73,10 @@ PromptVault/
 ├── test_prompts.py          # Prompt CRUD, ownership, and versioning test suite
 ├── test_llm_provider.py      # Provider adapter test suite (OpenAI client mocked)
 ├── test_executions.py         # LLM execution endpoint test suite (adapter mocked)
+├── test_pricing.py             # Cost calculation test suite
+├── docs/
+│   ├── decisions/              # Architecture decision records (ADRs)
+│   └── incidents/              # Incident write-ups
 ├── Dockerfile
 ├── .dockerignore
 └── requirements.txt
@@ -113,7 +125,7 @@ All endpoints are versioned under `/api/v1`.
 ### Execution (requires authentication)
 | Method | Path | Access | Description |
 |---|---|---|---|
-| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, estimated cost, latency, provider response ID, retry attempts). On a provider failure, retries transient errors with bounded backoff, then persists a failure record and responds with a mapped error status (`422`/`502`/`503`/`504` depending on failure category — see [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md)) instead of a flat `500` |
+| POST | `/api/v1/prompts/{id}/versions/{version_number}/execute` | owner or published | (Rate limited: 5/min per IP.) Run a saved prompt version against OpenAI (Responses API) with caller-supplied `input`; persists the execution and returns the full record (generated text, completion status, resolved model config, token usage, estimated cost, latency, provider response ID, retry attempts). On a provider failure, retries transient errors with bounded backoff, then persists a failure record and responds with a mapped error status (`422`/`502`/`503`/`504` depending on failure category — see [ADR-004](docs/decisions/ADR-004-failure-taxonomy-and-retry-policy.md)) instead of a flat `500` |
 | GET | `/api/v1/executions/{execution_id}` | executor only | Retrieve one past execution by id, success or failure. Deliberately **not** the prompt's "owner or published" rule — scoped to whoever ran it, regardless of the prompt's publish state (see [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md)) |
 
 ## Setup
@@ -173,6 +185,8 @@ docker build -t promptvault .
 docker run -p 8000:8000 --env-file .env promptvault
 ```
 
+The container runs `alembic upgrade head` before starting Uvicorn, so the database it points at is migrated automatically on every start (already-applied migrations are skipped). Note that inside a container, `localhost` refers to the container itself — point `DATABASE_URL` at a reachable database host.
+
 ## Design Notes
 
 - **Prompt content is separated from prompt metadata** deliberately — this avoids duplicating "current content" in two places and keeping them in sync; the current version is always the version row matching `Prompt.current_version`.
@@ -180,7 +194,8 @@ docker run -p 8000:8000 --env-file .env promptvault
 - **Deletes are soft** (`deleted_at` timestamp) rather than destructive, consistent with how production systems typically handle user data removal.
 - **Alembic's `sqlalchemy.url` is set dynamically at runtime** from the `DATABASE_URL` environment variable, rather than hardcoded in `alembic.ini` — necessary since the deployed database URL differs from the local one.
 - **API versioning uses URL path prefixing** (`/api/v1`) rather than headers or query params — simplest to test, document, and reason about; a future `/api/v2` can be added as a parallel set of routes without breaking existing clients.
-- **Rate limiting is keyed by IP address**, applied to signup and login specifically since those are the highest-risk endpoints for brute-force and spam abuse.
+- **Rate limiting is keyed by IP address**, applied to signup and login (the highest-risk endpoints for brute-force and spam abuse) and to LLM execution (the only endpoint that spends real money). Because the deployed app sits behind a reverse proxy, Uvicorn runs with `--proxy-headers` so the limiter sees the real client IP rather than the proxy's — otherwise every user would share a single rate-limit bucket.
+- **Database connections are health-checked before reuse** (`pool_pre_ping=True`) — the production database scales to zero when idle and drops open connections, so a pooled connection is verified with a cheap ping and transparently replaced if it's dead, instead of failing the first request after an idle period.
 - **The OpenAI SDK never leaks past `llm_provider.py`** — the execution route only ever sees a normalized `AdapterResponse`, never a raw provider object. See [ADR-002](docs/decisions/ADR-002-llm-provider-integration.md) for why the Responses API was chosen over Chat Completions, and how stored prompt content vs. per-call input is split.
 - **Executions persist resolved config, not the raw request** — `temperature`/`max_tokens` on a persisted `Execution` reflect what the provider actually used (read back from its response), not the caller's optional request field, which may have been left unset. See [ADR-003](docs/decisions/ADR-003-execution-persistence-and-access.md).
 - **Execution read access is scoped to the executor, not the prompt owner** — a published prompt makes its *content* readable to anyone, not the private input/output of everyone who's executed it. See ADR-003 for the specific leak this prevents.
@@ -192,7 +207,15 @@ docker run -p 8000:8000 --env-file .env promptvault
 
 ## Deployment
 
-Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. PostgreSQL is provisioned as a separate Railway service and connected via a referenced environment variable. Live at [promptvault-production-3160.up.railway.app](https://promptvault-production-3160.up.railway.app/docs).
+Live at [promptops-api.bommakantimaneesh.dev](https://promptops-api.bommakantimaneesh.dev/docs).
+
+- **App:** [Render](https://render.com) web service, built from this repository's `Dockerfile` and auto-deployed on push to `main`. Migrations run in the container's start command (`alembic upgrade head && uvicorn ...`), so a failed migration stops the server from starting against a mismatched schema.
+- **Database:** [Neon](https://neon.tech) serverless PostgreSQL, in the same region as the app.
+- **Domain:** a subdomain managed in Cloudflare DNS (CNAME to Render, DNS-only), with TLS issued by Render.
+- **Secrets:** `DATABASE_URL`, `SECRET_KEY`, `ALGORITHM`, and `OPENAI_API_KEY` are set as Render environment variables — never committed. Production uses a dedicated OpenAI project and key with a monthly budget limit, separate from local development.
+- **Free-tier trade-off:** both the app and the database scale to zero when idle, so the first request after inactivity is slow (~30–60s).
+
+Previously deployed on Railway; moved to Render + Neon to run on free tiers.
 
 ## Roadmap
 
@@ -205,3 +228,8 @@ Deployed on [Railway](https://railway.app) from this repository's `Dockerfile`. 
 - ~~Execution persistence and history~~ ✅
 - ~~Failure handling and bounded retries for LLM execution~~ ✅
 - ~~Token and cost accounting for LLM execution~~ ✅
+- ~~Rate limiting on LLM execution; redeploy to Render + Neon with a custom domain~~ ✅
+- Prompt variables and deterministic rendering (with a preview endpoint)
+- Structured outputs with server-side schema validation
+- Evaluation datasets, deterministic evaluators, and baseline-vs-candidate comparison
+- Held-out evaluation, regression gates, and evidence-based prompt promotion/rollback

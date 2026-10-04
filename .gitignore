@@ -13,3 +13,5 @@ env/
 .vscode/
 .idea/
 .coverage
+# Office lock files
+~$*

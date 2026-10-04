@@ -164,6 +164,56 @@ A monotonic clock meant specifically for measuring durations, unlike `time.time(
 
 Where it showed up: measuring `latency_ms` around only the `open_ai_adapter(...)` call in [routers/executions.py](../routers/executions.py), not the surrounding DB lookups or the persistence write.
 
+### slowapi's `@limiter.limit` needs a parameter literally named `request` (2026-10-04)
+
+A rate limiter has to know *who* is calling in order to count their calls. slowapi gets that from the HTTP request object, so your endpoint must accept a parameter named exactly `request` typed as FastAPI's `Request` — FastAPI fills it in automatically, and slowapi finds it by name. A body model called `execution_request` doesn't count. slowapi checks this when the decorator is applied, which happens at import time, so a missing `request` doesn't fail one endpoint — it stops the whole app from importing.
+
+Where it showed up: adding `@limiter.limit("5/minute")` to `execute_llm_provider` in [routers/executions.py](../routers/executions.py) broke `conftest.py`'s `from main import app` until `request: Request` was added. Because `conftest.py` sets `limiter.enabled = False`, the test suite can't prove the limit actually triggers — that was verified manually on the live deployment.
+
+---
+
+## Deployment
+
+### Behind a reverse proxy, your app sees the proxy's IP unless you trust forwarded headers (2026-10-04)
+
+On a host like Render, requests reach your app through a proxy, so the "client IP" your app sees is the proxy's. The real client IP is passed in an `X-Forwarded-For` header, which Uvicorn only uses if started with `--proxy-headers` (and `--forwarded-allow-ips` to say which proxies to trust). Without it, anything keyed on IP — like a rate limiter — treats every user as one person and puts them all in a single shared bucket.
+
+Where it showed up: the Uvicorn command in the [Dockerfile](../Dockerfile), needed for `rate_limit.py`'s `get_remote_address` key.
+
+### `pool_pre_ping` and databases that scale to zero (2026-10-04)
+
+SQLAlchemy keeps a pool of open database connections and reuses them. A serverless database like Neon suspends itself when idle and closes those connections from its side — but the pool doesn't know, and the next request fails with an error like "SSL connection has been closed unexpectedly". `create_engine(..., pool_pre_ping=True)` runs a tiny check query before handing out a pooled connection and swaps in a fresh one if it's dead.
+
+Where it showed up: `create_engine` in [database.py](../database.py), added before moving from Railway to Neon.
+
+### Running migrations in the container's start command (2026-10-04)
+
+If your host can't run a separate "pre-deploy" step, you can migrate on startup: `alembic upgrade head && uvicorn ...`. It's safe to run on every start because Alembic skips migrations that are already applied, and `&&` means a failed migration stops the server from starting against a schema it doesn't match. It needs `sh -c "..."` in the Dockerfile's `CMD` so the shell expands `${PORT:-8000}` (use the host's `PORT`, or 8000 if unset).
+
+Where it showed up: the [Dockerfile](../Dockerfile) `CMD`, for the Render deployment.
+
+### Pooled vs. direct database connections (2026-10-04)
+
+Neon offers two connection strings: one through a connection pooler (PgBouncer, hostname contains `-pooler`) and a direct one. The pooler lets many short-lived app connections share fewer real database connections, but it changes session behavior, so tools that need a normal, stateful session — like Alembic migrations — should use the direct connection.
+
+Where it showed up: running `alembic upgrade head` against Neon from your machine before the first Render deploy.
+
+### Subdomains, CNAMEs, and the "grey cloud" (2026-10-04)
+
+One domain can host many projects through subdomains: a `CNAME` record for `promptops-api` only affects `promptops-api.yourdomain`, never the root or other records. In Cloudflare, "DNS only" (grey cloud) publishes the record as-is; "Proxied" (orange cloud) hides the real target behind Cloudflare, which stops a host like Render from verifying the domain and issuing its own TLS certificate. Also: `.dev` domains are HTTPS-only in every browser, so nothing works until that certificate is issued.
+
+Where it showed up: pointing `promptops-api.bommakantimaneesh.dev` at Render while your portfolio stays on the root domain (Vercel).
+
+---
+
+## Security
+
+### A credential pasted anywhere outside a secret store is leaked — rotate it (2026-10-04)
+
+Once a password or connection string with a password in it has been pasted into a chat, a ticket, or a log, assume it's compromised: you can't control where that text is kept. The fix isn't deleting the message — it's resetting the credential so the old one stops working. When sharing a connection string for debugging, replace the password with `****` first.
+
+Where it showed up: the Neon `neondb_owner` connection string shared in a chat during deployment setup — that password needs resetting.
+
 ---
 
 ## AI / LLM Provider Integration

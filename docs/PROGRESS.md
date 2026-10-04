@@ -4,6 +4,8 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 
 **Current status: Step 4 complete. Not yet started: Step 5.**
 
+**Deployment (2026-10-04):** moved off Railway to free tiers — Render (Docker web service) + Neon (Postgres) + Cloudflare DNS, live at https://promptops-api.bommakantimaneesh.dev/docs. Prep changes (commit `6541f56`): migrations run in the container start command (`alembic upgrade head && uvicorn ...`), Uvicorn `--proxy-headers` so the IP-keyed limiter sees real client IPs behind Render's proxy, `pool_pre_ping=True` for Neon's idle connection drops, and `/execute` rate-limited at 5/min per IP. Migrations verified against Neon from local before deploying; manual smoke test on the live URL reported complete by the developer (checklist: success, truncated, provider-failure and validation paths, execution read-back, rate-limit 429); prod uses a dedicated OpenAI project with a budget limit. Note: tests run with the limiter disabled (`conftest.py`), so the `/execute` limit is verified manually only.
+
 ---
 
 ## Step 0 — Baseline PromptVault ✅ (2026-08-21)
@@ -41,7 +43,7 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 - Fixed a CI gap: `.github/workflows/ci.yml` had no `OPENAI_API_KEY`, which would have broken CI the moment `get_settings()` became required at import time; added a placeholder value alongside the existing dummy-value pattern.
 - Full suite green: 35/35 tests passing, 97% coverage; `ruff check .` clean.
 
-**Shipped as:** not yet committed/pushed — working tree has these changes staged for a commit.
+**Shipped as:** committed to `main` (`ff03781`).
 
 **Stop condition:** Able to explain exactly what happens from API request to model response — request anatomy (instructions/input roles, generation parameters), response anatomy (status vs. `incomplete_details`, token usage, provider response ID) — without assistance.
 
@@ -63,7 +65,7 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 - Full suite green: 40/40 passing, 97% coverage.
 - Verified manually end-to-end with a real billed call (a code-review-style prompt): persisted row's resolved `temperature`/`max_tokens`, token usage, `latency_ms`, and real `provider_response_id` all correct; retrieved the same execution back via `GET /api/v1/executions/{id}` and reconstructed exactly what ran from the row alone.
 
-**Shipped as:** not yet committed/pushed — working tree has these changes.
+**Shipped as:** committed to `main` (`32eedca`).
 
 **Stop condition:** Able to explain, without assistance: why resolved (not raw-request) config is persisted and where those resolved values come from; why execution read access is scoped to the executor rather than the prompt owner, including the specific leak scenario that rule prevents; and why failure persistence was deliberately deferred to Step 3 rather than solved ad hoc here.
 
@@ -91,7 +93,7 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 - Added `Execution.error_message` (`Text`, nullable) — migration `08595cee4245` — populated with `str(exc)` on the failure path, `None` on success, via the shared `build_execution_object` helper. Deliberately **not** added to `ExecutionOut` (`schemas.py`), so it's queryable/inspectable directly (or through a future internal-only view) but never serialized back through `GET /api/v1/executions/{id}` or the execute endpoint's own response — preserving the original "never leak provider text externally" decision while closing the internal diagnostic gap. Verified end-to-end (mocked failure → persisted row has the real message → both the execute response and the GET response omit it) via a throwaway script, not yet a committed test.
 - Also surfaced, not yet fixed: `open_ai_adapter` sends `temperature` unconditionally on every call; some models (the one tested against) reject it outright. Two designs discussed — a maintained list of "no-temperature" models (simple, goes stale) vs. reactively detecting `exc.param == "temperature"` on a `BadRequestError` and retrying once without it (a "bounded repair," the same pattern the build guide names for Step 7's structured-output validation, applied one step early) — no implementation decision made yet.
 
-**Shipped as:** not yet committed/pushed — working tree has these changes.
+**Shipped as:** committed to `main` (`6332f6a`, `f918f1e`, `fad1d5f`, `bb0fdee`).
 
 **Stop condition:** Able to explain, without assistance: why retry policy lives in a wrapper around `open_ai_adapter` rather than inside it; why the OpenAI SDK's own default retries had to be explicitly disabled; why terminal errors (auth, invalid request) never enter the backoff path; why a failed execution is still persisted with resolved (not raw-request) config even though no provider response ever came back; and why the HTTP status mapping deliberately never echoes raw provider error text to the caller.
 
@@ -116,6 +118,6 @@ Tracks progress through the Atomic Build Guide (Section 7 of `docs/PromptOps_AI_
 - Added `test_pricing.py` (11 cases): the hand-worked example, a regression lock pinned to the real billed execution above (not just a synthetic fixture), unpriced-model → `None`, each of the three `None`-token permutations (regression lock for bug #3), a zero-token boundary, an asymmetric-pricing model (`gpt-5.2-pro`, $21 vs $168 per 1M) with all tokens isolated to one side to catch an input/output rate swap, and a scale/quantization check.
 - Full suite green: 55/55 passing (44 pre-existing + 11 new); `ruff check` clean on `pricing.py`/`test_pricing.py`.
 
-**Shipped as:** not yet committed/pushed — working tree has these changes.
+**Shipped as:** committed to `main` (`510aec3`).
 
 **Stop condition:** Able to explain, without assistance: why cost is computed with `Decimal` (converted via `str()`, not directly from `float`) rather than plain `float` arithmetic; why an unpriced model and a missing token count both resolve to `None` rather than `0` or a crash; why `model_name` needed normalization before a pricing lookup, with the specific dated-vs-bare-alias evidence from the real DB; and why `calculate_cost` needed to handle `None` tokens even though the only call site today already guards against it elsewhere in spirit.
