@@ -125,5 +125,10 @@ class ExecutionOut(BaseModel):
     class Config:
         from_attributes = True
 
+class PromptVariableSpec(BaseModel):
+
+    name:str
+    required:bool=True
+    default:str|None=None
 
 
