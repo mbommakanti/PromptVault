@@ -1,7 +1,10 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Annotated
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
+
+VARIABLE_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
 
 
 class PromptCreate(BaseModel):
@@ -127,8 +130,28 @@ class ExecutionOut(BaseModel):
 
 class PromptVariableSpec(BaseModel):
 
-    name:str
+    name:str=Field(max_length=64,pattern=r"^"+VARIABLE_NAME_PATTERN+r"$")
     required:bool=True
     default:str|None=None
+    model_config=ConfigDict(extra="forbid")
 
+    @model_validator(mode="after")
+    def check_required_has_no_default(self):
+        if self.required and self.default is not None:
+            raise ValueError(f"variable '{self.name}' is required and cannot have a default")
+        return self
+
+def check_unique_variable_names(specs:list[PromptVariableSpec])->list[PromptVariableSpec]:
+    visited = set()
+    duplicates = set()
+    for spec in specs:
+        if spec.name in visited:
+            duplicates.add(spec.name)
+        else:
+            visited.add(spec.name)
+    if duplicates:
+        raise ValueError(f"duplicate variable names: {', '.join(sorted(duplicates))}")
+    return specs
+
+VariableSpecList = Annotated[list[PromptVariableSpec],AfterValidator(check_unique_variable_names)]
 
