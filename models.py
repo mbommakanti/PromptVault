@@ -55,6 +55,7 @@ class PromptVersion(Base):
     prompt_id = Column(Integer, ForeignKey("prompts.id"))
     version_number = Column(Integer)
     content = Column(Text,nullable=False)
+    variables = Column(JSON,nullable=False,server_default=sa.text("'[]'"))
     created_at = Column(DateTime, server_default=func.now())
 
 class Execution(Base):
@@ -81,6 +82,8 @@ class Execution(Base):
     provider_response_id = Column(String)
     latency_ms = Column(Integer,nullable=False)
     cost_usd = Column(Numeric(12,8))
+    variables = Column(JSON,nullable=False,server_default=sa.text("'{}'"))
+    rendered_instructions = Column(Text,nullable=True)
     retry_attempts = Column(Integer,nullable=False,server_default=sa.text("1"))
     created_at = Column(DateTime, nullable=False,server_default=func.now())
 
